@@ -54,7 +54,7 @@ object Fog {
     private var last: Pt? = null
 
     @Volatile var radius = 20.0
-    @Volatile var maxAcc = 40f
+    @Volatile var maxAcc = 50f
     /** Dernière position connue : lat, lon, précision (m), vitesse (m/s ou -1). */
     @Volatile var me: DoubleArray? = null
 
@@ -67,7 +67,7 @@ object Fog {
             if (store != null) return
             val p = ctx.getSharedPreferences("brume", Context.MODE_PRIVATE)
             radius = p.getInt("radius", 20).toDouble()
-            maxAcc = p.getInt("maxAcc", 40).toFloat()
+            maxAcc = p.getInt("maxAcc", 50).toFloat()
             val s = Store(ctx.applicationContext)
             store = s
             try { s.load(chunks, cities) } catch (e: Exception) { e.printStackTrace() }

@@ -73,13 +73,16 @@ class TrackingService : Service(), LocationListener {
             e.printStackTrace(); stopSelf(); return START_NOT_STICKY
         }
         if (!running) {
-            try {
-                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper())
-            } catch (e: SecurityException) {
-                stopSelf(); return START_NOT_STICKY
-            } catch (e: IllegalArgumentException) {
-                stopSelf(); return START_NOT_STICKY
+            // GPS dehors + réseau (Wi-Fi / antennes) pour avoir une position aussi à l'intérieur
+            var ok = 0
+            for (prov in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+                try {
+                    lm.requestLocationUpdates(prov, 1000L, 0f, this, Looper.getMainLooper()); ok++
+                } catch (e: SecurityException) {
+                } catch (e: IllegalArgumentException) { }
             }
+            if (ok == 0) { stopSelf(); return START_NOT_STICKY }
+            seedLastKnown()
             running = true
             Fog.breakPath()
             Fog.addListener(listener)
@@ -99,7 +102,21 @@ class TrackingService : Service(), LocationListener {
         super.onDestroy()
     }
 
+    private var lastGpsAt = 0L
+
+    private fun seedLastKnown() {
+        if (Fog.me != null) return
+        val best = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .mapNotNull { try { lm.getLastKnownLocation(it) } catch (e: Exception) { null } }
+            .maxByOrNull { it.elapsedRealtimeNanos } ?: return
+        Fog.me = doubleArrayOf(best.latitude, best.longitude, if (best.hasAccuracy()) best.accuracy.toDouble() else 99.0, -1.0)
+    }
+
     override fun onLocationChanged(loc: Location) {
+        val now = SystemClock.elapsedRealtime()
+        if (loc.provider == LocationManager.GPS_PROVIDER) lastGpsAt = now
+        // Si le GPS répond, on ignore le réseau (moins précis) pour éviter les zigzags
+        else if (now - lastGpsAt < 15_000) return
         val acc = if (loc.hasAccuracy()) loc.accuracy else 0f
         val spd = if (loc.hasSpeed()) loc.speed.toDouble() else -1.0
         Fog.me = doubleArrayOf(loc.latitude, loc.longitude, acc.toDouble(), spd)

@@ -33,7 +33,6 @@ import org.osmdroid.views.overlay.Polyline
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.time.LocalDate
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -47,6 +46,7 @@ class MainActivity : Activity() {
     private lateinit var panelTitle: TextView
     private lateinit var panelBody: LinearLayout
     private var follow = true
+    private var centeredOnce = false
     private var panelMode = ""
     private val outlines = ArrayList<Polyline>()
 
@@ -86,6 +86,7 @@ class MainActivity : Activity() {
             (resources.displayMetrics.heightPixels * 0.5).toInt()
 
         map.setTileSource(TileSourceFactory.MAPNIK)
+        map.setTilesScaledToDpi(true)
         map.setMultiTouchControls(true)
         map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
         map.isHorizontalMapRepetitionEnabled = false
@@ -102,6 +103,7 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences("brume", MODE_PRIVATE)
         map.controller.setZoom(prefs.getFloat("z", 5f).toDouble())
         map.controller.setCenter(GeoPoint(prefs.getFloat("lat", 46.6f).toDouble(), prefs.getFloat("lon", 2.4f).toDouble()))
+        seedLastKnown()
 
         applyInsets()
 
@@ -110,7 +112,7 @@ class MainActivity : Activity() {
             follow = true
             clearOutline()
             val m = Fog.me
-            if (m != null) map.controller.animateTo(GeoPoint(m[0], m[1]), max(map.zoomLevelDouble, 16.0), 600L)
+            if (m != null) zoomAround(m[0], m[1], true)
             else if (!TrackingService.running) startTracking()
         }
         findViewById<Button>(R.id.bCities).setOnClickListener { showPanel("cities") }
@@ -179,6 +181,8 @@ class MainActivity : Activity() {
 
     private fun launchService() {
         follow = true
+        centeredOnce = false
+        seedLastKnown()
         TrackingService.start(this)
         val prefs = getSharedPreferences("brume", MODE_PRIVATE)
         if (!prefs.getBoolean("askedBattery", false) && !ignoringBattery()) {
@@ -233,10 +237,32 @@ class MainActivity : Activity() {
         gps.setTextColor(if (on && m != null && m[2] <= Fog.maxAcc) green else muted)
         bTrack.text = if (on) "⏸ En cours" else "▶ Explorer"
         bTrack.backgroundTintList = ColorStateList.valueOf(if (on) green else accent)
-        if (follow && on && m != null) {
-            if (map.zoomLevelDouble < 14.0) map.controller.setZoom(16.0)
+        if (m != null && !centeredOnce) {
+            centeredOnce = true
+            zoomAround(m[0], m[1], false)
+        } else if (follow && on && m != null) {
             map.controller.setCenter(GeoPoint(m[0], m[1]))
         }
+    }
+
+    /** Centre la carte sur le point avec environ 130 m visibles de chaque côté. */
+    private fun zoomAround(lat: Double, lon: Double, animated: Boolean) {
+        val dLat = 130.0 / Fog.MPD
+        val dLon = dLat / Math.cos(lat * Fog.RAD)
+        val box = BoundingBox(lat + dLat, lon + dLon, lat - dLat, lon - dLon)
+        if (map.width > 0) map.zoomToBoundingBox(box, animated, 0)
+        else map.post { map.zoomToBoundingBox(box, animated, 0) }
+    }
+
+    /** Dernière position connue du téléphone, pour centrer la carte dès l'ouverture. */
+    @Suppress("MissingPermission")
+    private fun seedLastKnown() {
+        if (Fog.me != null || !hasLoc()) return
+        val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+        val best = listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)
+            .mapNotNull { try { lm.getLastKnownLocation(it) } catch (e: Exception) { null } }
+            .maxByOrNull { it.elapsedRealtimeNanos } ?: return
+        Fog.me = doubleArrayOf(best.latitude, best.longitude, if (best.hasAccuracy()) best.accuracy.toDouble() else 99.0, -1.0)
     }
 
     // ---------- Panneaux ----------
@@ -314,7 +340,7 @@ class MainActivity : Activity() {
             Fog.savePrefs(this); rebuildPanel()
         }
         settingRow("Précision GPS max : ±${Fog.maxAcc.toInt()} m", "Touche pour changer · les positions moins précises sont ignorées") {
-            val opts = listOf(20, 30, 40, 60, 100)
+            val opts = listOf(20, 30, 40, 50, 60, 100)
             Fog.maxAcc = opts[(opts.indexOf(Fog.maxAcc.toInt()) + 1) % opts.size].toFloat()
             Fog.savePrefs(this); rebuildPanel()
         }
