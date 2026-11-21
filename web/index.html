@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Brume">
+<meta name="theme-color" content="#10141e">
+<title>Brume</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{--bg:#10141e;--card:#1a2030;--fg:#eef1f7;--mut:#8f98ad;--acc:#7cc4ff;--ok:#5fd39a;--warn:#ffb454}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #map{position:absolute;inset:0;background:#0b0e15}
+  #fog{position:absolute;inset:0;pointer-events:none;z-index:450}
+  .top{position:absolute;z-index:600;left:12px;right:12px;top:calc(env(safe-area-inset-top) + 10px);display:flex;gap:8px;align-items:center;pointer-events:none}
+  .chip{pointer-events:auto;background:rgba(26,32,48,.92);backdrop-filter:blur(8px);border-radius:14px;padding:8px 12px;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+  .brand{font-weight:700;letter-spacing:.5px}
+  #stat{font-size:13px;color:var(--mut)} #stat b{color:var(--fg)}
+  #gps{margin-left:auto;font-size:12px;color:var(--mut)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#555;margin-right:6px;vertical-align:1px}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)} .dot.bad{background:var(--warn)}
+  .bar{position:absolute;z-index:600;left:0;right:0;bottom:calc(env(safe-area-inset-bottom) + 14px);display:flex;justify-content:center;gap:10px}
+  .btn{border:0;background:rgba(26,32,48,.95);color:var(--fg);border-radius:16px;padding:12px 16px;font-size:15px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,.4);cursor:pointer}
+  .btn.main{background:var(--acc);color:#0b1220;min-width:120px}
+  .btn.main.on{background:var(--ok)}
+  .sheet{position:absolute;z-index:700;left:0;right:0;bottom:0;max-height:72%;background:var(--card);border-radius:20px 20px 0 0;padding:14px 16px calc(env(safe-area-inset-bottom) + 16px);transform:translateY(105%);transition:transform .25s;overflow:auto;box-shadow:0 -8px 30px rgba(0,0,0,.5)}
+  .sheet.open{transform:none}
+  .sheet h2{margin:4px 0 12px;font-size:18px;display:flex;align-items:center}
+  .sheet h2 button{margin-left:auto;background:none;border:0;color:var(--mut);font-size:22px}
+  .city{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer}
+  .city .nm{flex:1;min-width:0} .city .nm small{display:block;color:var(--mut);font-size:12px}
+  .city .pc{font-weight:700;font-variant-numeric:tabular-nums}
+  .prog{height:5px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:5px;overflow:hidden}
+  .prog i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--ok))}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+  .row small{display:block;color:var(--mut);font-size:12px}
+  select,input[type=range]{accent-color:var(--acc)}
+  select{background:#0f1420;color:var(--fg);border:1px solid #2a3348;border-radius:8px;padding:6px}
+  .sbtn{background:#0f1420;color:var(--fg);border:1px solid #2a3348;border-radius:10px;padding:8px 12px;font-size:14px}
+  .danger{color:#ff7a7a;border-color:#5a2a2a}
+  .note{color:var(--mut);font-size:12px;margin-top:12px}
+  .empty{color:var(--mut);padding:20px 0;text-align:center}
+  #toast{position:absolute;z-index:800;left:50%;top:calc(env(safe-area-inset-top) + 64px);transform:translateX(-50%);background:rgba(26,32,48,.96);padding:8px 14px;border-radius:12px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap}
+  #toast.show{opacity:1}
+  .me{width:16px;height:16px;border-radius:50%;background:var(--acc);border:3px solid #fff;box-shadow:0 0 12px var(--acc)}
+  .leaflet-control-attribution{font-size:9px;background:rgba(16,20,30,.6)!important;color:#aab!important}
+  .leaflet-control-attribution a{color:#cde!important}
+  .leaflet-top.leaflet-left{top:calc(env(safe-area-inset-top) + 56px)}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<canvas id="fog"></canvas>
+
+<div class="top">
+  <div class="chip"><span class="brand">Brume</span> <span id="stat"></span></div>
+  <div class="chip" id="gps"><span class="dot" id="dot"></span><span id="gpstxt">GPS éteint</span></div>
+</div>
+
+<div class="bar">
+  <button class="btn" id="bCenter" title="Me centrer">◎</button>
+  <button class="btn main" id="bTrack">▶ Explorer</button>
+  <button class="btn" id="bCities">Villes</button>
+  <button class="btn" id="bSet">⚙</button>
+</div>
+
+<div class="sheet" id="sCities">
+  <h2>Villes découvertes <button data-close>×</button></h2>
+  <div id="cityList"></div>
+  <div class="note">Le pourcentage = surface dévoilée à l'intérieur des limites officielles de la commune (OpenStreetMap) ÷ surface totale de la commune.</div>
+</div>
+
+<div class="sheet" id="sSet">
+  <h2>Réglages <button data-close>×</button></h2>
+  <div class="row"><div>Rayon de découverte<small>S'applique aux prochains déplacements</small></div>
+    <select id="radius"><option value="15">15 m</option><option value="20">20 m</option><option value="25">25 m</option><option value="30">30 m</option></select></div>
+  <div class="row"><div>Précision GPS max<small>Positions moins précises ignorées : <b id="accv"></b></small></div>
+    <input type="range" id="acc" min="15" max="100" step="5"></div>
+  <div class="row"><div>Garder l'écran allumé<small>Le navigateur coupe le GPS écran verrouillé</small></div>
+    <input type="checkbox" id="wake"></div>
+  <div class="row"><div>Importer un tracé<small>GPX (Strava, Garmin…) ou sauvegarde Brume</small></div>
+    <label class="sbtn">Choisir…<input type="file" id="imp" accept=".gpx,.json,application/gpx+xml,application/json" hidden></label></div>
+  <div class="row"><div>Sauvegarder mes données<small>Fichier JSON à garder en lieu sûr</small></div>
+    <button class="sbtn" id="exp">Exporter</button></div>
+  <div class="row"><div>Tout effacer</div><button class="sbtn danger" id="reset">Effacer</button></div>
+  <div class="note" id="info"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ---------- Grille : cellules de ~10 m × 10 m ---------- */
+const CELL = 10, MPD = 111320, DLAT = CELL / MPD, CH = 64; // chunks de 64×64 cellules (~640 m)
+const RAD = Math.PI / 180;
+const S = Object.assign({ radius: 20, maxAcc: 40, wake: true }, safeJSON(localStorage.getItem('brume.settings')));
+function safeJSON(s){ try { return JSON.parse(s) || {}; } catch(e){ return {}; } }
+function saveSettings(){ try { localStorage.setItem('brume.settings', JSON.stringify(S)); } catch(e){} }
+
+const rowOf = lat => Math.floor(lat / DLAT);
+const rowLat = i => (i + 0.5) * DLAT;
+const dLonOf = i => CELL / (MPD * Math.max(Math.cos(rowLat(i) * RAD), 0.02));
+const cellCenter = (i, j) => { const dl = dLonOf(i); return [rowLat(i), (j + 0.5) * dl]; };
+
+const chunks = new Map();   // "ci,cj" -> Uint8Array(512) bitmap
+const dirty = new Set();
+let totalCells = 0;
+
+function setCell(i, j){
+  const ci = Math.floor(i / CH), cj = Math.floor(j / CH), k = ci + ',' + cj;
+  let b = chunks.get(k);
+  if (!b){ b = new Uint8Array(CH * CH / 8); chunks.set(k, b); }
+  const idx = (i - ci * CH) * CH + (j - cj * CH), p = idx >> 3, m = 1 << (idx & 7);
+  if (b[p] & m) return false;
+  b[p] |= m; dirty.add(k); totalCells++; return true;
+}
+
+function markDisc(lat, lon, out){
+  const r = S.radius, i0 = rowOf(lat), k = Math.ceil(r / CELL) + 1;
+  for (let di = -k; di <= k; di++){
+    const i = i0 + di, dy = (rowLat(i) - lat) * MPD;
+    if (Math.abs(dy) > r) continue;
+    const half = Math.sqrt(r * r - dy * dy), dl = dLonOf(i), hd = half / CELL * dl;
+    const j0 = Math.ceil((lon - hd) / dl - 0.5), j1 = Math.floor((lon + hd) / dl - 0.5);
+    for (let j = j0; j <= j1; j++) if (setCell(i, j)) out.push(i, j);
+  }
+}
+function dist(a, b){
+  const x = (b.lon - a.lon) * Math.cos((a.lat + b.lat) / 2 * RAD), y = b.lat - a.lat;
+  return Math.sqrt(x * x + y * y) * MPD;
+}
+function markPath(a, b, out){
+  const n = Math.max(1, Math.ceil(dist(a, b) / 5));
+  for (let s = 1; s <= n; s++){ const t = s / n; markDisc(a.lat + (b.lat - a.lat) * t, a.lon + (b.lon - a.lon) * t, out); }
+}
+
+/* ---------- Villes (limites OSM via Nominatim) ---------- */
+const cities = new Map();    // id -> {id,name,sub,geo,bbox,area,n}
+const misses = [];           // points sans commune trouvée
+const dirtyCities = new Set();
+
+function rings(geo){ return geo.type === 'Polygon' ? [geo.coordinates] : geo.coordinates; }
+function bboxOf(geo){
+  let a = [180, 90, -180, -90];
+  for (const poly of rings(geo)) for (const [x, y] of poly[0]){ a[0] = Math.min(a[0], x); a[1] = Math.min(a[1], y); a[2] = Math.max(a[2], x); a[3] = Math.max(a[3], y); }
+  return a;
+}
+function ringArea(r, lat0){
+  const c = Math.cos(lat0 * RAD); let s = 0;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) s += (r[j][0] * c) * r[i][1] - (r[i][0] * c) * r[j][1];
+  return Math.abs(s / 2) * MPD * MPD;
+}
+function areaOf(geo, bbox){
+  const lat0 = (bbox[1] + bbox[3]) / 2; let A = 0;
+  for (const poly of rings(geo)) poly.forEach((r, k) => { A += (k ? -1 : 1) * ringArea(r, lat0); });
+  return A;
+}
+function inRing(x, y, r){
+  let inside = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++){
+    const xi = r[i][0], yi = r[i][1], xj = r[j][0], yj = r[j][1];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function inCity(c, lat, lon){
+  const b = c.bbox;
+  if (lon < b[0] || lon > b[2] || lat < b[1] || lat > b[3]) return false;
+  for (const poly of rings(c.geo)){
+    if (!inRing(lon, lat, poly[0])) continue;
+    let hole = false; for (let k = 1; k < poly.length; k++) if (inRing(lon, lat, poly[k])){ hole = true; break; }
+    if (!hole) return true;
+  }
+  return false;
+}
+function cityAt(lat, lon){ for (const c of cities.values()) if (inCity(c, lat, lon)) return c; return null; }
+
+function countNew(out){
+  if (!out.length || !cities.size) return;
+  let la0 = 90, la1 = -90, lo0 = 180, lo1 = -180; const pts = [];
+  for (let k = 0; k < out.length; k += 2){ const p = cellCenter(out[k], out[k + 1]); pts.push(p);
+    la0 = Math.min(la0, p[0]); la1 = Math.max(la1, p[0]); lo0 = Math.min(lo0, p[1]); lo1 = Math.max(lo1, p[1]); }
+  for (const c of cities.values()){
+    const b = c.bbox; if (lo1 < b[0] || lo0 > b[2] || la1 < b[1] || la0 > b[3]) continue;
+    let n = 0; for (const p of pts) if (inCity(c, p[0], p[1])) n++;
+    if (n){ c.n += n; dirtyCities.add(c.id); }
+  }
+}
+function recount(c){
+  const b = c.bbox; let n = 0;
+  for (const [k, bits] of chunks){
+    const [ci, cj] = k.split(',').map(Number), i0 = ci * CH;
+    const lat0 = i0 * DLAT, lat1 = (i0 + CH) * DLAT;
+    if (lat1 < b[1] || lat0 > b[3]) continue;
+    const dl = dLonOf(i0 + CH / 2), lon0 = cj * CH * dl * 0.98, lon1 = (cj + 1) * CH * dl * 1.02;
+    if (Math.max(lon0, lon1) < b[0] || Math.min(lon0, lon1) > b[2]) continue;
+    forBits(bits, (li, lj) => { const p = cellCenter(i0 + li, cj * CH + lj); if (inCity(c, p[0], p[1])) n++; });
+  }
+  c.n = n; dirtyCities.add(c.id);
+}
+function forBits(bits, fn){
+  for (let p = 0; p < bits.length; p++){ const v = bits[p]; if (!v) continue;
+    for (let q = 0; q < 8; q++) if (v & (1 << q)){ const idx = (p << 3) | q; fn(idx >> 6, idx & 63); } }
+}
+
+const geoQueue = []; let geoRunning = false, lastQueued = null;
+function maybeGeocode(pt, force){
+  if (cityAt(pt.lat, pt.lon)) return;
+  if (misses.some(m => dist(m, pt) < 800)) return;
+  if (!force && lastQueued && dist(lastQueued, pt) < 300) return;
+  if (geoQueue.some(q => dist(q, pt) < 500)) return;
+  lastQueued = pt; geoQueue.push(pt); runGeo();
+}
+async function runGeo(){
+  if (geoRunning) return; geoRunning = true;
+  while (geoQueue.length){
+    const pt = geoQueue.shift();
+    if (cityAt(pt.lat, pt.lon) || misses.some(m => dist(m, pt) < 800)) continue;
+    try {
+      const u = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&polygon_geojson=1&polygon_threshold=0.00005&accept-language=fr&lat=${pt.lat}&lon=${pt.lon}`;
+      const r = await fetch(u); const d = await r.json();
+      const g = d && d.geojson;
+      if (g && (g.type === 'Polygon' || g.type === 'MultiPolygon')){
+        const id = d.osm_type + d.osm_id;
+        if (!cities.has(id)){
+          const a = d.address || {};
+          const name = a.city || a.town || a.village || a.municipality || d.name || 'Lieu inconnu';
+          const sub = [a.state || a.county, a.country].filter(Boolean).join(', ');
+          const bbox = bboxOf(g);
+          const c = { id, name, sub, geo: g, bbox, area: areaOf(g, bbox), n: 0, first: Date.now() };
+          cities.set(id, c); recount(c); toast('Nouvelle ville : ' + name);
+          refreshStats(); if (sCities.classList.contains('open')) renderCities();
+        }
+        if (!cities.has(d.osm_type + d.osm_id) || !inCity(cities.get(d.osm_type + d.osm_id), pt.lat, pt.lon)) misses.push(pt);
+      } else misses.push(pt);
+    } catch(e){ geoQueue.unshift(pt); await sleep(15000); }
+    await sleep(1200); // politique d'usage Nominatim : max 1 req/s
+  }
+  geoRunning = false;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ---------- Stockage (IndexedDB) ---------- */
+let db = null;
+function openDB(){
+  return new Promise(res => {
+    try {
+      const rq = indexedDB.open('brume', 1);
+      rq.onupgradeneeded = () => { rq.result.createObjectStore('chunks'); rq.result.createObjectStore('cities'); };
+      rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null);
+    } catch(e){ res(null); }
+  });
+}
+function loadAll(){
+  return new Promise(res => {
+    if (!db) return res();
+    const tx = db.transaction(['chunks', 'cities']);
+    const cs = tx.objectStore('chunks').openCursor();
+    cs.onsuccess = () => { const c = cs.result; if (c){ const b = new Uint8Array(c.value); chunks.set(c.key, b); forBits(b, () => totalCells++); c.continue(); } };
+    const ct = tx.objectStore('cities').openCursor();
+    ct.onsuccess = () => { const c = ct.result; if (c){ cities.set(c.key, c.value); c.continue(); } };
+    tx.oncomplete = res; tx.onerror = res;
+  });
+}
+function flush(){
+  if (!db || (!dirty.size && !dirtyCities.size)) return;
+  try {
+    const tx = db.transaction(['chunks', 'cities'], 'readwrite');
+    for (const k of dirty) tx.objectStore('chunks').put(chunks.get(k), k);
+    for (const k of dirtyCities) tx.objectStore('cities').put(cities.get(k), k);
+    dirty.clear(); dirtyCities.clear();
+  } catch(e){}
+}
+setInterval(flush, 3000);
+document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); else if (tracking) wakeOn(); });
+window.addEventListener('pagehide', flush);
+
+/* ---------- Carte & brouillard ---------- */
+const map = L.map('map', { zoomControl: false, zoomAnimation: false, worldCopyJump: true, minZoom: 2 }).setView([46.6, 2.4], 5);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  maxZoom: 20, subdomains: 'abcd', attribution: '© OpenStreetMap, © CARTO'
+}).addTo(map);
+const fog = document.getElementById('fog'), ctx = fog.getContext('2d');
+let raf = 0; const redraw = () => { if (!raf) raf = requestAnimationFrame(draw); };
+map.on('move zoom resize viewreset', redraw);
+
+function draw(){
+  raf = 0;
+  const sz = map.getSize(), dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (fog.width !== sz.x * dpr || fog.height !== sz.y * dpr){ fog.width = sz.x * dpr; fog.height = sz.y * dpr; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+  ctx.fillStyle = 'rgba(14,18,28,0.9)'; ctx.fillRect(0, 0, sz.x, sz.y);
+  ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = '#000';
+  const B = map.getBounds(), S0 = B.getSouth(), N0 = B.getNorth(), W0 = B.getWest(), E0 = B.getEast();
+  const z = map.getZoom();
+  const cellPxAtZ = CELL / (156543 * Math.cos(map.getCenter().lat * RAD) / Math.pow(2, z));
+  if (cellPxAtZ > 1.5 && 'filter' in ctx) ctx.filter = `blur(${Math.min(cellPxAtZ * 0.5, 10).toFixed(1)}px)`;
+  for (const [k, bits] of chunks){
+    const [ci, cj] = k.split(',').map(Number), i0 = ci * CH;
+    const lat0 = i0 * DLAT, lat1 = (i0 + CH) * DLAT;
+    if (lat1 < S0 || lat0 > N0) continue;
+    const dl = dLonOf(i0 + CH / 2), lon0 = cj * CH * dl, lon1 = (cj + 1) * CH * dl;
+    // gestion simple des copies du monde
+    let shift = 0; while (lon1 + shift < W0) shift += 360; while (lon0 + shift > E0) shift -= 360;
+    if (lon1 + shift < W0 || lon0 + shift > E0) continue;
+    const p0 = map.latLngToContainerPoint([lat0, lon0 + shift]), p1 = map.latLngToContainerPoint([lat1, lon1 + shift]);
+    const w = p1.x - p0.x, h = p1.y - p0.y;
+    if (Math.abs(w) < 4){ ctx.fillRect((p0.x + p1.x) / 2 - 1.5, (p0.y + p1.y) / 2 - 1.5, 3, 3); continue; }
+    const cpx = Math.abs(w) / CH, s = Math.max(cpx * 1.2, 2);
+    forBits(bits, (li, lj) => {
+      const i = i0 + li, dli = dLonOf(i), lon = (cj * CH + lj + 0.5) * dli;
+      const x = p0.x + (lon - lon0) / (lon1 - lon0) * w, y = p0.y + (li + 0.5) / CH * h;
+      ctx.fillRect(x - s / 2, y - s / 2, s, s);
+    });
+  }
+}
+
+/* ---------- Géolocalisation ---------- */
+let tracking = false, watchId = null, last = null, me = null, follow = true, wakeLock = null;
+const bTrack = document.getElementById('bTrack'), dot = document.getElementById('dot'), gpstxt = document.getElementById('gpstxt');
+
+async function wakeOn(){ if (!S.wake || !('wakeLock' in navigator)) return; try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e){} }
+function wakeOff(){ try { wakeLock && wakeLock.release(); } catch(e){} wakeLock = null; }
+
+function startTrack(){
+  if (!('geolocation' in navigator)){ toast('Géolocalisation indisponible'); return; }
+  tracking = true; follow = true; last = null;
+  bTrack.textContent = '⏸ En cours'; bTrack.classList.add('on'); gpstxt.textContent = 'Recherche GPS…';
+  watchId = navigator.geolocation.watchPosition(onFix, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+  wakeOn();
+}
+function stopTrack(){
+  tracking = false; if (watchId != null) navigator.geolocation.clearWatch(watchId); watchId = null;
+  bTrack.textContent = '▶ Explorer'; bTrack.classList.remove('on'); dot.className = 'dot'; gpstxt.textContent = 'GPS éteint';
+  wakeOff(); flush();
+}
+function onErr(e){
+  dot.className = 'dot bad';
+  gpstxt.textContent = e.code === 1 ? 'Accès refusé' : 'Signal perdu';
+  if (e.code === 1){ toast('Autorise la localisation pour ce site'); stopTrack(); }
+}
+function onFix(p){
+  const { latitude: lat, longitude: lon, accuracy } = p.coords;
+  const pt = { lat, lon, t: p.timestamp || Date.now() };
+  if (!me) me = L.marker([lat, lon], { icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [22, 22] }), interactive: false }).addTo(map);
+  else me.setLatLng([lat, lon]);
+  if (follow){ map.setView([lat, lon], Math.max(map.getZoom(), 16)); }
+  const spd = p.coords.speed != null && p.coords.speed >= 0 ? ' · ' + Math.round(p.coords.speed * 3.6) + ' km/h' : '';
+  if (accuracy > S.maxAcc){ dot.className = 'dot bad'; gpstxt.textContent = `±${Math.round(accuracy)} m (ignoré)`; return; }
+  dot.className = 'dot on'; gpstxt.textContent = `±${Math.round(accuracy)} m${spd}`;
+  const out = [];
+  // Pas de limite de vitesse : on relie les points tant que le flux GPS est continu (< 60 s d'écart)
+  if (last && pt.t - last.t <= 60000) markPath(last, pt, out); else markDisc(lat, lon, out);
+  last = pt;
+  countNew(out); maybeGeocode(pt); refreshStats(); redraw();
+}
+map.on('dragstart', () => { follow = false; });
+
+/* ---------- Import / export ---------- */
+async function importGPX(text){
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  const segs = [...doc.querySelectorAll('trkseg, rte')];
+  if (!segs.length) segs.push(doc.documentElement);
+  let total = 0, n = 0;
+  toast('Import en cours…');
+  for (const seg of segs){
+    const pts = [...seg.querySelectorAll('trkpt, rtept')].map(e => {
+      const t = e.querySelector('time'); return { lat: +e.getAttribute('lat'), lon: +e.getAttribute('lon'), t: t ? Date.parse(t.textContent) : NaN };
+    }).filter(p => isFinite(p.lat) && isFinite(p.lon));
+    let prev = null, lastGeo = null, out = [];
+    for (const p of pts){
+      const cont = prev && (isFinite(p.t) && isFinite(prev.t) ? p.t - prev.t <= 120000 : dist(prev, p) < 2000);
+      if (cont) markPath(prev, p, out); else markDisc(p.lat, p.lon, out);
+      if (!lastGeo || dist(lastGeo, p) > 700){ maybeGeocode(p, true); lastGeo = p; }
+      prev = p; total++;
+      if (++n % 400 === 0){ countNew(out); out = []; refreshStats(); redraw(); await sleep(0); }
+    }
+    countNew(out);
+  }
+  refreshStats(); redraw(); flush();
+  toast(`${total} points importés`);
+}
+function toB64(u8){ let s = ''; for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); }
+function fromB64(s){ const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+function exportData(){
+  flush();
+  const o = { app: 'brume', v: 1, date: new Date().toISOString(), chunks: {}, cities: [...cities.values()] };
+  for (const [k, b] of chunks) o.chunks[k] = toB64(b);
+  const blob = new Blob([JSON.stringify(o)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'brume-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function importJSON(o){
+  if (o.app !== 'brume') throw new Error('format');
+  for (const [k, s] of Object.entries(o.chunks)){
+    const u = fromB64(s), b = chunks.get(k);
+    if (!b){ chunks.set(k, u); forBits(u, () => totalCells++); }
+    else for (let p = 0; p < u.length; p++){ const add = u[p] & ~b[p]; if (add){ b[p] |= add; for (let q = 0; q < 8; q++) if (add & (1 << q)) totalCells++; } }
+    dirty.add(k);
+  }
+  for (const c of o.cities || []) if (!cities.has(c.id)) cities.set(c.id, c);
+  for (const c of cities.values()) recount(c);
+  flush(); refreshStats(); redraw(); toast('Sauvegarde restaurée');
+}
+
+/* ---------- Interface ---------- */
+const statEl = document.getElementById('stat'), sCities = document.getElementById('sCities'), sSet = document.getElementById('sSet');
+let outline = null;
+function fmtArea(m2){ return m2 >= 1e6 ? (m2 / 1e6).toFixed(m2 >= 1e8 ? 0 : 2) + ' km²' : Math.round(m2).toLocaleString('fr-FR') + ' m²'; }
+function pct(c){ return c.area > 0 ? Math.min(100, c.n * CELL * CELL / c.area * 100) : 0; }
+function fmtPct(v){ return v >= 10 ? v.toFixed(1) : v >= 1 ? v.toFixed(2) : v.toFixed(3); }
+function refreshStats(){
+  statEl.innerHTML = `· <b>${fmtArea(totalCells * CELL * CELL)}</b> · ${cities.size} ville${cities.size > 1 ? 's' : ''}`;
+}
+function renderCities(){
+  const L0 = document.getElementById('cityList');
+  const list = [...cities.values()].sort((a, b) => pct(b) - pct(a));
+  if (!list.length){ L0.innerHTML = '<div class="empty">Aucune ville encore. Lance l\'exploration !</div>'; return; }
+  L0.innerHTML = list.map(c => {
+    const v = pct(c);
+    return `<div class="city" data-id="${c.id}"><div class="nm">${esc(c.name)}<small>${esc(c.sub)} · ${fmtArea(c.n * CELL * CELL)} / ${fmtArea(c.area)}</small>
+      <div class="prog"><i style="width:${Math.max(v, 0.5)}%"></i></div></div><div class="pc">${fmtPct(v)} %</div></div>`;
+  }).join('');
+}
+function esc(s){ return String(s || '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+document.getElementById('cityList').addEventListener('click', e => {
+  const el = e.target.closest('.city'); if (!el) return; const c = cities.get(el.dataset.id); if (!c) return;
+  follow = false; if (outline) outline.remove();
+  outline = L.geoJSON(c.geo, { style: { color: '#7cc4ff', weight: 2, fill: false, dashArray: '6 4' }, interactive: false }).addTo(map);
+  map.fitBounds([[c.bbox[1], c.bbox[0]], [c.bbox[3], c.bbox[2]]], { padding: [30, 30] });
+  sCities.classList.remove('open');
+});
+function toggle(sheet){ const o = sheet.classList.contains('open'); sCities.classList.remove('open'); sSet.classList.remove('open'); if (!o) sheet.classList.add('open'); }
+document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => b.closest('.sheet').classList.remove('open'));
+document.getElementById('bCities').onclick = () => { renderCities(); toggle(sCities); };
+document.getElementById('bSet').onclick = () => { renderSettings(); toggle(sSet); };
+bTrack.onclick = () => tracking ? stopTrack() : startTrack();
+document.getElementById('bCenter').onclick = () => {
+  follow = true; if (outline){ outline.remove(); outline = null; }
+  if (me) map.setView(me.getLatLng(), Math.max(map.getZoom(), 16));
+  else if (!tracking) startTrack();
+};
+let tt; function toast(t){ const el = document.getElementById('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => el.classList.remove('show'), 2600); }
+
+function renderSettings(){
+  document.getElementById('radius').value = S.radius;
+  document.getElementById('acc').value = S.maxAcc; document.getElementById('accv').textContent = '±' + S.maxAcc + ' m';
+  document.getElementById('wake').checked = S.wake;
+  document.getElementById('info').textContent = `${totalCells.toLocaleString('fr-FR')} cellules de 10 m · ${chunks.size} blocs · stockage ${db ? 'local (IndexedDB)' : 'indisponible : pense à exporter'}`;
+}
+document.getElementById('radius').onchange = e => { S.radius = +e.target.value; saveSettings(); };
+document.getElementById('acc').oninput = e => { S.maxAcc = +e.target.value; document.getElementById('accv').textContent = '±' + S.maxAcc + ' m'; saveSettings(); };
+document.getElementById('wake').onchange = e => { S.wake = e.target.checked; saveSettings(); if (tracking){ S.wake ? wakeOn() : wakeOff(); } };
+document.getElementById('exp').onclick = exportData;
+document.getElementById('imp').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return; e.target.value = '';
+  const txt = await f.text();
+  try { if (/^\s*[{[]/.test(txt)) importJSON(JSON.parse(txt)); else await importGPX(txt); renderSettings(); }
+  catch(err){ toast('Fichier non reconnu'); }
+};
+document.getElementById('reset').onclick = () => {
+  if (!confirm('Effacer toute la carte découverte et les villes ?')) return;
+  chunks.clear(); cities.clear(); misses.length = 0; totalCells = 0; dirty.clear(); dirtyCities.clear();
+  if (db){ const tx = db.transaction(['chunks', 'cities'], 'readwrite'); tx.objectStore('chunks').clear(); tx.objectStore('cities').clear(); }
+  refreshStats(); redraw(); renderSettings(); toast('Tout est effacé');
+};
+
+(async () => {
+  db = await openDB(); await loadAll();
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch(e){}
+  refreshStats(); redraw();
+})();
+</script>
+</body>
+</html>
