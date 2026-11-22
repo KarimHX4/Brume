@@ -14,8 +14,10 @@ import kotlin.math.max
 
 /** Dessine le brouillard par-dessus la carte puis « gomme » les cellules dévoilées. */
 class FogOverlay : Overlay() {
-    private val fogColor = 0xE80E121C.toInt()
+    private val fogColor = 0xEB121826.toInt()
     private val clear = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
+    // Halo semi-transparent autour des zones dévoilées : bords de brume adoucis
+    private val soft = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT); alpha = 70 }
     private val meFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF7CC4FF.toInt() }
     private val meStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 5f }
     private val accPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x307CC4FF }
@@ -59,7 +61,7 @@ class FogOverlay : Overlay() {
                     val lon = (cj * Fog.CH + lj + 0.5) * rowDl[li]
                     val x = p0.x + ((lon - lon0) / span * w).toFloat()
                     val y = p0.y + (li + 0.5f) / Fog.CH * h
-                    if (round) c.drawCircle(x, y, cpx * 0.85f, clear)
+                    if (round) { c.drawCircle(x, y, cpx * 1.9f, soft); c.drawCircle(x, y, cpx * 0.85f, clear) }
                     else c.drawRect(x - sz / 2, y - sz / 2, x + sz / 2, y + sz / 2, clear)
                 }
             }

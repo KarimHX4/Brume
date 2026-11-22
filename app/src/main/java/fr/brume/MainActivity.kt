@@ -8,27 +8,31 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.DashPathEffect
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.XYZTileSource
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.CopyrightOverlay
 import org.osmdroid.views.overlay.Polyline
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -39,9 +43,18 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     private lateinit var map: MapView
-    private lateinit var stat: TextView
+    private lateinit var cityLabel: TextView
+    private lateinit var cityName: TextView
+    private lateinit var cityPct: TextView
+    private lateinit var cityProg: ProgressBar
+    private lateinit var total: TextView
     private lateinit var gps: TextView
-    private lateinit var bTrack: Button
+    private lateinit var gpsDot: View
+    private lateinit var banner: TextView
+    private lateinit var bTrack: View
+    private lateinit var bTrackIcon: ImageView
+    private lateinit var bTrackText: TextView
+    private lateinit var scrim: View
     private lateinit var panel: View
     private lateinit var panelTitle: TextView
     private lateinit var panelBody: LinearLayout
@@ -50,11 +63,13 @@ class MainActivity : Activity() {
     private var panelMode = ""
     private val outlines = ArrayList<Polyline>()
 
-    private val white = 0xFFEEF1F7.toInt()
+    private val fg = 0xFFEEF1F7.toInt()
     private val muted = 0xFF8F98AD.toInt()
     private val accent = 0xFF7CC4FF.toInt()
     private val green = 0xFF5FD39A.toInt()
+    private val warn = 0xFFFFB454.toInt()
     private val danger = 0xFFFF7A7A.toInt()
+    private val rowColor = 0xFF222A3D.toInt()
 
     private val listener: () -> Unit = { runOnUiThread { refresh() } }
 
@@ -62,6 +77,18 @@ class MainActivity : Activity() {
         private const val REQ_PERM = 1
         private const val REQ_OPEN = 10
         private const val REQ_SAVE = 11
+
+        /** Fond de carte CARTO « Voyager » (données OpenStreetMap), plus lisible que le style OSM standard. */
+        private val VOYAGER = XYZTileSource(
+            "CartoVoyager", 0, 20, 256, ".png",
+            arrayOf(
+                "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
+                "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
+                "https://c.basemaps.cartocdn.com/rastertiles/voyager/",
+                "https://d.basemaps.cartocdn.com/rastertiles/voyager/"
+            ),
+            "© OpenStreetMap · © CARTO"
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,16 +103,25 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
 
         map = findViewById(R.id.map)
-        stat = findViewById(R.id.stat)
+        cityLabel = findViewById(R.id.cityLabel)
+        cityName = findViewById(R.id.cityName)
+        cityPct = findViewById(R.id.cityPct)
+        cityProg = findViewById(R.id.cityProg)
+        total = findViewById(R.id.total)
         gps = findViewById(R.id.gps)
+        gpsDot = findViewById(R.id.gpsDot)
+        banner = findViewById(R.id.banner)
         bTrack = findViewById(R.id.bTrack)
+        bTrackIcon = findViewById(R.id.bTrackIcon)
+        bTrackText = findViewById(R.id.bTrackText)
+        scrim = findViewById(R.id.scrim)
         panel = findViewById(R.id.panel)
         panelTitle = findViewById(R.id.panelTitle)
         panelBody = findViewById(R.id.panelBody)
         findViewById<ScrollView>(R.id.panelScroll).layoutParams.height =
-            (resources.displayMetrics.heightPixels * 0.5).toInt()
+            (resources.displayMetrics.heightPixels * 0.55).toInt()
 
-        map.setTileSource(TileSourceFactory.MAPNIK)
+        map.setTileSource(VOYAGER)
         map.setTilesScaledToDpi(true)
         map.setMultiTouchControls(true)
         map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
@@ -93,8 +129,14 @@ class MainActivity : Activity() {
         map.isVerticalMapRepetitionEnabled = false
         map.setScrollableAreaLimitLatitude(MapView.getTileSystem().maxLatitude, MapView.getTileSystem().minLatitude, 0)
         map.minZoomLevel = 3.0
-        map.maxZoomLevel = 19.0
+        map.maxZoomLevel = 20.0
         map.overlays.add(FogOverlay())
+        map.overlays.add(CopyrightOverlay(this).apply {
+            setTextColor(0x99FFFFFF.toInt())
+            setTextSize(9)
+            setAlignBottom(true)
+            setAlignRight(false)
+        })
         @Suppress("ClickableViewAccessibility")
         map.setOnTouchListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_MOVE) follow = false
@@ -107,19 +149,22 @@ class MainActivity : Activity() {
 
         applyInsets()
 
-        bTrack.setOnClickListener { if (TrackingService.running) TrackingService.stop(this) else startTracking() }
-        findViewById<Button>(R.id.bCenter).setOnClickListener {
+        bTrack.setOnClickListener { press(it); if (TrackingService.running) TrackingService.stop(this) else startTracking() }
+        findViewById<View>(R.id.bCenter).setOnClickListener {
+            press(it)
             follow = true
             clearOutline()
             val m = Fog.me
             if (m != null) zoomAround(m[0], m[1], true)
             else if (!TrackingService.running) startTracking()
         }
-        findViewById<Button>(R.id.bCities).setOnClickListener { showPanel("cities") }
-        findViewById<Button>(R.id.bSettings).setOnClickListener { showPanel("settings") }
-        findViewById<View>(R.id.panelClose).setOnClickListener { panel.visibility = View.GONE }
+        findViewById<View>(R.id.bCities).setOnClickListener { press(it); showPanel("cities") }
+        findViewById<View>(R.id.bSettings).setOnClickListener { press(it); showPanel("settings") }
+        findViewById<View>(R.id.panelClose).setOnClickListener { hidePanel() }
+        scrim.setOnClickListener { hidePanel() }
+        findViewById<View>(R.id.topCard).setOnClickListener { showPanel("cities") }
 
-        Geocoder.onNewCity = { c -> runOnUiThread { toast("Nouvelle ville : ${c.name}") } }
+        Geocoder.onNewCity = { c -> runOnUiThread { showBanner("Nouvelle ville · ${c.name}") } }
 
         // Reprend l'exploration si elle tournait quand l'app a été fermée par le système
         if (prefs.getBoolean("tracking", false) && !TrackingService.running && hasLoc()) TrackingService.start(this)
@@ -143,6 +188,12 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (panel.visibility == View.VISIBLE) hidePanel() else super.onBackPressed()
+    }
+
     // ---------- Plein écran sous les barres système ----------
     @Suppress("DEPRECATION")
     private fun goEdgeToEdge() {
@@ -153,15 +204,18 @@ class MainActivity : Activity() {
 
     @Suppress("DEPRECATION")
     private fun applyInsets() {
-        val top = findViewById<View>(R.id.topBar)
+        val top = findViewById<View>(R.id.topCard)
         val bottom = findViewById<View>(R.id.bottomBar)
+        val center = findViewById<View>(R.id.bCenter)
         findViewById<View>(R.id.root).setOnApplyWindowInsetsListener { _, ins ->
             val t = ins.systemWindowInsetTop
             val b = ins.systemWindowInsetBottom
             (top.layoutParams as FrameLayout.LayoutParams).topMargin = t + dp(8)
-            (bottom.layoutParams as FrameLayout.LayoutParams).bottomMargin = b + dp(16)
-            top.requestLayout(); bottom.requestLayout()
-            panel.setPadding(dp(16), dp(12), dp(16), b + dp(16))
+            (bottom.layoutParams as FrameLayout.LayoutParams).bottomMargin = b + dp(18)
+            (center.layoutParams as FrameLayout.LayoutParams).bottomMargin = b + dp(92)
+            (banner.layoutParams as FrameLayout.LayoutParams).topMargin = t + dp(130)
+            top.requestLayout(); bottom.requestLayout(); center.requestLayout(); banner.requestLayout()
+            panel.setPadding(dp(16), dp(10), dp(16), b + dp(16))
             ins
         }
     }
@@ -221,22 +275,51 @@ class MainActivity : Activity() {
     // ---------- Rafraîchissement ----------
     private fun refresh() {
         map.invalidate()
-        val n = Fog.cities.size
-        stat.text = "Brume · ${Fog.fmtArea(Fog.exploredArea())} · $n ville${if (n > 1) "s" else ""}"
-        val m = Fog.me
         val on = TrackingService.running
+        val m = Fog.me
+        val n = Fog.cities.size
+
+        // Carte du haut
+        val c = if (m != null) Fog.cityAt(m[0], m[1]) else null
+        if (c != null) {
+            cityLabel.text = if (c.sub.isNotEmpty()) c.sub else "Ville actuelle"
+            cityName.text = c.name
+            cityPct.text = Fog.fmtPct(c.pct())
+            cityProg.visibility = View.VISIBLE
+            cityProg.progress = (c.pct() * 10).roundToInt().coerceAtLeast(4)
+        } else {
+            cityLabel.text = if (on) "Exploration en cours" else "Brume"
+            cityName.text = when {
+                on && m == null -> "Recherche de ta position…"
+                on -> "Identification de la commune…"
+                Fog.totalCells == 0L -> "Touche Explorer pour dissiper la brume"
+                else -> "Prêt à explorer"
+            }
+            cityPct.text = ""
+            cityProg.visibility = View.GONE
+        }
+        total.text = "${Fog.fmtArea(Fog.exploredArea())} dévoilés · $n ville${if (n > 1) "s" else ""}"
+
+        // État du GPS
+        val good = on && m != null && m[2] <= Fog.maxAcc
         gps.text = when {
             !on -> "GPS éteint"
-            m == null -> "Recherche GPS…"
+            m == null -> "Recherche…"
             else -> buildString {
+                if (m[3] >= 1.0) append("${(m[3] * 3.6).roundToInt()} km/h · ")
                 append("±${m[2].roundToInt()} m")
-                if (m[3] >= 0) append(" · ${(m[3] * 3.6).roundToInt()} km/h")
-                if (m[2] > Fog.maxAcc) append(" (ignoré)")
+                if (m[2] > Fog.maxAcc) append(" · trop imprécis")
             }
         }
-        gps.setTextColor(if (on && m != null && m[2] <= Fog.maxAcc) green else muted)
-        bTrack.text = if (on) "⏸ En cours" else "▶ Explorer"
+        val gc = when { !on -> muted; good -> green; else -> warn }
+        gps.setTextColor(if (on) gc else muted)
+        gpsDot.backgroundTintList = ColorStateList.valueOf(gc)
+
+        // Bouton principal
+        bTrackText.text = if (on) "En cours" else "Explorer"
+        bTrackIcon.setImageResource(if (on) R.drawable.ic_pause else R.drawable.ic_play)
         bTrack.backgroundTintList = ColorStateList.valueOf(if (on) green else accent)
+
         if (m != null && !centeredOnce) {
             centeredOnce = true
             zoomAround(m[0], m[1], false)
@@ -265,12 +348,42 @@ class MainActivity : Activity() {
         Fog.me = doubleArrayOf(best.latitude, best.longitude, if (best.hasAccuracy()) best.accuracy.toDouble() else 99.0, -1.0)
     }
 
+    // ---------- Animations ----------
+    private fun press(v: View) {
+        v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(70).withEndAction {
+            v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+        }.start()
+    }
+
+    private fun showBanner(s: String) {
+        banner.text = s
+        banner.visibility = View.VISIBLE
+        banner.alpha = 0f
+        banner.translationY = -dp(20).toFloat()
+        banner.animate().alpha(1f).translationY(0f).setDuration(250).setInterpolator(DecelerateInterpolator()).withEndAction {
+            banner.animate().alpha(0f).setStartDelay(2600).setDuration(400).withEndAction { banner.visibility = View.GONE }.start()
+        }.start()
+    }
+
     // ---------- Panneaux ----------
     private fun showPanel(mode: String) {
-        if (panel.visibility == View.VISIBLE && panelMode == mode) { panel.visibility = View.GONE; return }
+        if (panel.visibility == View.VISIBLE && panelMode == mode) { hidePanel(); return }
+        val wasOpen = panel.visibility == View.VISIBLE
         panelMode = mode
-        panel.visibility = View.VISIBLE
         rebuildPanel()
+        if (wasOpen) return
+        panel.visibility = View.VISIBLE
+        scrim.visibility = View.VISIBLE
+        panel.translationY = resources.displayMetrics.heightPixels.toFloat()
+        panel.animate().translationY(0f).setDuration(280).setInterpolator(DecelerateInterpolator(2f)).start()
+        scrim.animate().alpha(1f).setDuration(250).start()
+    }
+
+    private fun hidePanel() {
+        if (panel.visibility != View.VISIBLE) return
+        panel.animate().translationY(panel.height.toFloat()).setDuration(220)
+            .withEndAction { panel.visibility = View.GONE }.start()
+        scrim.animate().alpha(0f).setDuration(220).withEndAction { scrim.visibility = View.GONE }.start()
     }
 
     private fun rebuildPanel() {
@@ -279,35 +392,70 @@ class MainActivity : Activity() {
     }
 
     private fun buildCities() {
-        panelTitle.text = "Villes découvertes"
+        panelTitle.text = "Mes villes"
         val list = synchronized(Fog.lock) { Fog.cities.values.toList() }.sortedByDescending { it.pct() }
+
+        // Tuiles de résumé
+        val tiles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tiles.addView(statTile(Fog.fmtArea(Fog.exploredArea()), "dévoilés"), weighted())
+        tiles.addView(statTile("${list.size}", if (list.size > 1) "villes" else "ville"), weighted().apply { marginStart = dp(8) })
+        tiles.addView(statTile(list.firstOrNull()?.let { Fog.fmtPct(it.pct()) } ?: "—", "record"), weighted().apply { marginStart = dp(8) })
+        panelBody.addView(tiles, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) })
+
         if (list.isEmpty()) {
-            panelBody.addView(text("Aucune ville pour l'instant. Lance l'exploration !", 14f, muted).apply { setPadding(0, dp(20), 0, dp(20)) })
+            panelBody.addView(text("Aucune ville pour l'instant.\nLance l'exploration et la première commune apparaîtra ici.", 14f, muted).apply {
+                gravity = Gravity.CENTER; setPadding(0, dp(24), 0, dp(24))
+            })
             return
         }
-        for (c in list) {
+        list.forEachIndexed { idx, c ->
             val row = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(0, dp(10), 0, dp(10))
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = rounded(rowColor, 14f)
+                setPadding(dp(12), dp(12), dp(14), dp(12))
                 isClickable = true
-                setOnClickListener { showCity(c) }
+                setOnClickListener { press(this); showCity(c) }
             }
-            val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            line.addView(text(c.name, 16f, white, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            line.addView(text(Fog.fmtPct(c.pct()), 16f, white, true))
-            row.addView(line)
-            row.addView(text("${c.sub} · ${Fog.fmtArea(c.n * Fog.CELL * Fog.CELL)} / ${Fog.fmtArea(c.area)}", 12f, muted))
-            val pb = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            // Rang
+            row.addView(text("${idx + 1}", 13f, if (idx < 3) 0xFF0B1220.toInt() else fg, true).apply {
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(when (idx) { 0 -> 0xFFFFD166.toInt(); 1 -> 0xFFD7DEE8.toInt(); 2 -> 0xFFE0A872.toInt(); else -> 0xFF2E3850.toInt() })
+                }
+            }, LinearLayout.LayoutParams(dp(30), dp(30)).apply { marginEnd = dp(12) })
+
+            val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            line.addView(text(c.name, 16f, fg, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            line.addView(text(Fog.fmtPct(c.pct()), 16f, accent, true))
+            col.addView(line)
+            col.addView(text("${Fog.fmtArea(c.n * Fog.CELL * Fog.CELL)} sur ${Fog.fmtArea(c.area)}" +
+                (if (c.sub.isNotEmpty()) " · ${c.sub}" else ""), 12f, muted).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+            col.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
                 max = 1000
-                progress = (c.pct() * 10).roundToInt().coerceAtLeast(5)
-                progressTintList = ColorStateList.valueOf(accent)
-            }
-            row.addView(pb, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply { topMargin = dp(6) })
-            panelBody.addView(row)
+                progress = (c.pct() * 10).roundToInt().coerceAtLeast(4)
+                progressDrawable = getDrawable(R.drawable.progress)
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(5)).apply { topMargin = dp(8) })
+            row.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+            panelBody.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
         }
-        panelBody.addView(text("% = surface dévoilée dans les limites officielles de la commune (OpenStreetMap) ÷ surface de la commune.", 12f, muted)
-            .apply { setPadding(0, dp(12), 0, 0) })
+        panelBody.addView(text("Touche une ville pour voir ses limites. Le % compare la surface dévoilée à la surface officielle de la commune (OpenStreetMap).", 12f, muted)
+            .apply { setPadding(dp(4), dp(8), dp(4), 0) })
     }
+
+    private fun statTile(value: String, label: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(rowColor, 14f)
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        addView(text(value, 16f, fg, true).apply { maxLines = 1 })
+        addView(text(label, 11f, muted))
+    }
+
+    private fun weighted() = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
 
     private fun showCity(c: City) {
         follow = false
@@ -317,13 +465,14 @@ class MainActivity : Activity() {
             val pl = Polyline()
             pl.setPoints((0 until r.size / 2).map { GeoPoint(r[2 * it + 1], r[2 * it]) })
             pl.outlinePaint.color = accent
-            pl.outlinePaint.strokeWidth = dp(2).toFloat()
-            pl.outlinePaint.pathEffect = DashPathEffect(floatArrayOf(18f, 12f), 0f)
+            pl.outlinePaint.strokeWidth = dp(3).toFloat()
+            pl.outlinePaint.pathEffect = DashPathEffect(floatArrayOf(24f, 14f), 0f)
             map.overlays.add(pl)
             outlines.add(pl)
         }
-        map.zoomToBoundingBox(BoundingBox(c.bbox[3], c.bbox[2], c.bbox[1], c.bbox[0]), true, dp(40))
-        panel.visibility = View.GONE
+        map.zoomToBoundingBox(BoundingBox(c.bbox[3], c.bbox[2], c.bbox[1], c.bbox[0]), true, dp(48))
+        hidePanel()
+        showBanner("${c.name} · ${Fog.fmtPct(c.pct())}")
     }
 
     private fun clearOutline() {
@@ -334,49 +483,74 @@ class MainActivity : Activity() {
 
     private fun buildSettings() {
         panelTitle.text = "Réglages"
-        settingRow("Rayon de découverte : ${Fog.radius.toInt()} m", "Touche pour changer · s'applique aux prochains trajets") {
+        section("Exploration")
+        settingRow("Rayon de découverte", "Appliqué aux prochains trajets", "${Fog.radius.toInt()} m") {
             val opts = listOf(15, 20, 25, 30)
             Fog.radius = opts[(opts.indexOf(Fog.radius.toInt()) + 1) % opts.size].toDouble()
             Fog.savePrefs(this); rebuildPanel()
         }
-        settingRow("Précision GPS max : ±${Fog.maxAcc.toInt()} m", "Touche pour changer · les positions moins précises sont ignorées") {
+        settingRow("Précision GPS acceptée", "Les positions moins précises sont ignorées", "±${Fog.maxAcc.toInt()} m") {
             val opts = listOf(20, 30, 40, 50, 60, 100)
             Fog.maxAcc = opts[(opts.indexOf(Fog.maxAcc.toInt()) + 1) % opts.size].toFloat()
             Fog.savePrefs(this); rebuildPanel()
         }
-        settingRow("Batterie : ne pas restreindre Brume",
-            if (ignoringBattery()) "✓ Autorisé : Android ne coupera pas l'exploration" else "Recommandé pour l'exploration écran verrouillé") {
-            askBattery()
-        }
-        settingRow("Importer un tracé", "GPX (Strava, Garmin, Komoot…) ou sauvegarde Brume .json (y compris de la version web)") {
+        val okBatt = ignoringBattery()
+        settingRow("Batterie sans restriction",
+            if (okBatt) "Android ne coupera pas l'exploration" else "Recommandé pour l'écran verrouillé",
+            if (okBatt) "✓" else null, if (okBatt) green else warn) { askBattery() }
+
+        section("Données")
+        settingRow("Importer un tracé", "GPX (Strava, Garmin, Komoot…) ou sauvegarde .json", null) {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
             startActivityForResult(i, REQ_OPEN)
         }
-        settingRow("Exporter mes données", "Fichier JSON à garder en lieu sûr") {
+        settingRow("Exporter mes données", "Fichier JSON à garder en lieu sûr", null) {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
                 .setType("application/json").putExtra(Intent.EXTRA_TITLE, "brume-${LocalDate.now()}.json")
             startActivityForResult(i, REQ_SAVE)
         }
-        settingRow("Tout effacer", "Carte découverte et villes", danger) {
+        settingRow("Tout effacer", "Carte découverte et villes", null, danger) {
             AlertDialog.Builder(this).setTitle("Tout effacer ?")
                 .setMessage("La carte découverte et toutes les villes seront supprimées.")
                 .setPositiveButton("Effacer") { _, _ -> Fog.reset(); rebuildPanel(); toast("Tout est effacé") }
                 .setNegativeButton("Annuler", null).show()
         }
-        panelBody.addView(text("${String.format("%,d", Fog.totalCells)} cellules de 10 m · ${Fog.chunks.size} blocs", 12f, muted)
-            .apply { setPadding(0, dp(12), 0, 0) })
+        panelBody.addView(text("${String.format("%,d", Fog.totalCells)} cellules de 10 m · ${Fog.chunks.size} blocs · Brume 1.1", 11f, muted)
+            .apply { gravity = Gravity.CENTER; setPadding(0, dp(14), 0, 0) })
     }
 
-    private fun settingRow(title: String, sub: String, color: Int = white, onClick: () -> Unit) {
+    private fun section(title: String) {
+        panelBody.addView(text(title.uppercase(), 11f, muted, true).apply {
+            letterSpacing = 0.08f
+            setPadding(dp(4), dp(10), 0, dp(6))
+        })
+    }
+
+    private fun settingRow(title: String, sub: String, value: String?, color: Int = fg, onClick: () -> Unit) {
         val row = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(12), 0, dp(12))
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(rowColor, 14f)
+            setPadding(dp(14), dp(12), dp(12), dp(12))
             isClickable = true
-            setOnClickListener { onClick() }
+            setOnClickListener { press(this); onClick() }
         }
-        row.addView(text(title, 15f, color, true))
-        row.addView(text(sub, 12f, muted))
-        panelBody.addView(row)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(text(title, 15f, color, true))
+        col.addView(text(sub, 12f, muted))
+        row.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (value != null) {
+            row.addView(text(value, 13f, if (color == fg) accent else color, true).apply {
+                background = rounded(0x267CC4FF, 10f)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+        } else {
+            row.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_chevron)
+                imageTintList = ColorStateList.valueOf(muted)
+            }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginStart = dp(8) })
+        }
+        panelBody.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
     }
 
     // ---------- Import / export ----------
@@ -421,6 +595,11 @@ class MainActivity : Activity() {
 
     // ---------- Utilitaires ----------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
+
+    private fun rounded(color: Int, radiusDp: Float) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = radiusDp * resources.displayMetrics.density
+    }
 
     private fun text(s: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
         text = s
