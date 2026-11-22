@@ -27,7 +27,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.XYZTileSource
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -79,7 +79,7 @@ class MainActivity : Activity() {
         private const val REQ_SAVE = 11
 
         /** Fond de carte CARTO « Voyager » (données OpenStreetMap), plus lisible que le style OSM standard. */
-        private val VOYAGER = XYZTileSource(
+        private val VOYAGER = XYTileSource(
             "CartoVoyager", 0, 20, 256, ".png",
             arrayOf(
                 "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
