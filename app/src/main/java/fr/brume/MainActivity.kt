@@ -27,7 +27,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.XYTileSource
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -78,17 +78,6 @@ class MainActivity : Activity() {
         private const val REQ_OPEN = 10
         private const val REQ_SAVE = 11
 
-        /** Fond de carte CARTO « Voyager » (données OpenStreetMap), plus lisible que le style OSM standard. */
-        private val VOYAGER = XYTileSource(
-            "CartoVoyager", 0, 20, 256, ".png",
-            arrayOf(
-                "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
-                "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
-                "https://c.basemaps.cartocdn.com/rastertiles/voyager/",
-                "https://d.basemaps.cartocdn.com/rastertiles/voyager/"
-            ),
-            "© OpenStreetMap · © CARTO"
-        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -121,7 +110,7 @@ class MainActivity : Activity() {
         findViewById<ScrollView>(R.id.panelScroll).layoutParams.height =
             (resources.displayMetrics.heightPixels * 0.55).toInt()
 
-        map.setTileSource(VOYAGER)
+        map.setTileSource(TileSourceFactory.MAPNIK)
         map.setTilesScaledToDpi(true)
         map.setMultiTouchControls(true)
         map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
@@ -129,7 +118,7 @@ class MainActivity : Activity() {
         map.isVerticalMapRepetitionEnabled = false
         map.setScrollableAreaLimitLatitude(MapView.getTileSystem().maxLatitude, MapView.getTileSystem().minLatitude, 0)
         map.minZoomLevel = 3.0
-        map.maxZoomLevel = 20.0
+        map.maxZoomLevel = 19.0
         map.overlays.add(FogOverlay())
         map.overlays.add(CopyrightOverlay(this).apply {
             setTextColor(0x99FFFFFF.toInt())
