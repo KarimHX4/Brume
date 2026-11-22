@@ -34,7 +34,6 @@ import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.CopyrightOverlay
 import org.osmdroid.views.overlay.Polyline
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.time.LocalDate
 import kotlin.math.min
@@ -504,7 +503,7 @@ class MainActivity : Activity() {
             if (okBatt) "✓" else null, if (okBatt) green else warn) { askBattery() }
 
         section("Données")
-        settingRow("Importer un tracé", "GPX (Strava, Garmin, Komoot…) ou sauvegarde .json", null) {
+        settingRow("Importer un historique", "Google Maps « Vos trajets », GPX (Strava, Garmin…) ou sauvegarde Brume", null) {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
             startActivityForResult(i, REQ_OPEN)
         }
@@ -569,18 +568,30 @@ class MainActivity : Activity() {
                 toast("Import en cours…")
                 Thread {
                     try {
-                        val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                        val txt = String(bytes, 0, min(bytes.size, 256)).trimStart('﻿', ' ', '\n', '\r', '\t')
-                        if (txt.startsWith("{")) {
-                            Io.importJson(String(bytes).trimStart('﻿'))
-                            toast("Sauvegarde restaurée")
-                        } else {
-                            val n = Io.importGpx(ByteArrayInputStream(bytes))
-                            toast(if (n > 0) "$n points importés" else "Aucun point trouvé dans ce fichier")
+                        val head = contentResolver.openInputStream(uri)!!.use { st ->
+                            val buf = ByteArray(4096); val n = st.read(buf); if (n > 0) String(buf, 0, n) else ""
+                        }.trimStart('\uFEFF', ' ', '\n', '\r', '\t')
+                        when {
+                            head.startsWith("{") && head.contains("\"app\"") && head.contains("brume") -> {
+                                val txt = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+                                Io.importJson(String(txt).trimStart('\uFEFF'))
+                                toast("Sauvegarde restaurée")
+                            }
+                            head.startsWith("{") || head.startsWith("[") -> {
+                                toast("Lecture de l'historique Google…")
+                                val n = contentResolver.openInputStream(uri)!!.use { Timeline.load(it) }
+                                toast(if (n > 0) "${String.format("%,d", n)} positions importées · les villes apparaissent peu à peu" else "Aucune position trouvée dans ce fichier")
+                            }
+                            else -> {
+                                val n = contentResolver.openInputStream(uri)!!.use { Io.importGpx(it) }
+                                toast(if (n > 0) "$n points importés" else "Aucun point trouvé dans ce fichier")
+                            }
                         }
                         Fog.flush()
                     } catch (e: Exception) {
                         e.printStackTrace(); toast("Fichier non reconnu")
+                    } catch (e: OutOfMemoryError) {
+                        toast("Fichier trop volumineux")
                     }
                 }.start()
             }
