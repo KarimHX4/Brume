@@ -156,7 +156,10 @@ class MainActivity : Activity() {
         Geocoder.onNewCity = { c -> runOnUiThread { showBanner("Nouvelle ville · ${c.name}") } }
 
         // Reprend l'exploration si elle tournait quand l'app a été fermée par le système
-        if (prefs.getBoolean("tracking", false) && !TrackingService.running && hasLoc()) TrackingService.start(this)
+        if (prefs.getBoolean("tracking", false) && !TrackingService.running) {
+            if (hasLoc() && TrackingService.locationOn(this)) TrackingService.start(this)
+            else prefs.edit().putBoolean("tracking", false).apply()
+        }
     }
 
     override fun onResume() {
@@ -222,7 +225,19 @@ class MainActivity : Activity() {
         if (need.isEmpty()) launchService() else requestPermissions(need.toTypedArray(), REQ_PERM)
     }
 
+    private fun askLocationOn() {
+        AlertDialog.Builder(this)
+            .setTitle("Localisation désactivée")
+            .setMessage("Active la localisation du téléphone pour explorer.")
+            .setPositiveButton("Activer") { _, _ ->
+                try { startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) } catch (e: Exception) { }
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
+    }
+
     private fun launchService() {
+        if (!TrackingService.locationOn(this)) { askLocationOn(); return }
         follow = true
         centeredOnce = false
         seedLastKnown()

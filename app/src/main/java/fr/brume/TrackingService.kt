@@ -37,6 +37,13 @@ class TrackingService : Service(), LocationListener {
         fun stop(ctx: Context) {
             ctx.stopService(Intent(ctx, TrackingService::class.java))
         }
+        /** Vrai si la localisation du téléphone est activée (GPS ou réseau). */
+        fun locationOn(ctx: Context): Boolean {
+            val lm = ctx.getSystemService(LOCATION_SERVICE) as LocationManager
+            return try {
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+            } catch (e: Exception) { true }
+        }
     }
 
     private lateinit var lm: LocationManager
@@ -71,6 +78,9 @@ class TrackingService : Service(), LocationListener {
             }
         } catch (e: Exception) {
             e.printStackTrace(); stopSelf(); return START_NOT_STICKY
+        }
+        if (!running && !locationOn(this)) {
+            stopSelf(); return START_NOT_STICKY
         }
         if (!running) {
             // GPS dehors + réseau (Wi-Fi / antennes) pour avoir une position aussi à l'intérieur
@@ -131,7 +141,14 @@ class TrackingService : Service(), LocationListener {
     @Deprecated("Deprecated in Java")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     override fun onProviderEnabled(provider: String) {}
-    override fun onProviderDisabled(provider: String) { Fog.breakPath() }
+    override fun onProviderDisabled(provider: String) {
+        Fog.breakPath()
+        // Localisation du téléphone coupée : on arrête proprement l'exploration
+        if (!locationOn(this)) {
+            android.widget.Toast.makeText(this, "Localisation désactivée : exploration arrêtée", android.widget.Toast.LENGTH_LONG).show()
+            stopSelf()
+        }
+    }
 
     private fun buildNotif(): Notification {
         val open = PendingIntent.getActivity(

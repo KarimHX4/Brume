@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Carte pliée, encore dans la brume -->
+    <path android:fillColor="#FF2A3550" android:pathData="M28,37 L44,31 L44,73 L28,79 Z" />
+    <path android:fillColor="#FF222C44" android:pathData="M44,31 L64,37 L64,79 L44,73 Z" />
+    <path android:fillColor="#FF2A3550" android:pathData="M64,37 L80,31 L80,73 L64,79 Z" />
+    <!-- Halo de brume autour du hublot -->
+    <path android:fillColor="#FF3A4660" android:pathData="M36,55 a18,18 0 1,0 36,0 a18,18 0 1,0 -36,0 Z" />
+    <!-- Hublot : la carte dévoilée -->
+    <group>
+        <clip-path android:pathData="M38,55 a16,16 0 1,0 32,0 a16,16 0 1,0 -32,0 Z" />
+        <path android:fillColor="#FFE9EEF5" android:pathData="M30,35 L44,30 L44,80 L30,80 Z" />
+        <path android:fillColor="#FFD5DDE9" android:pathData="M44,30 L64,36 L64,80 L44,80 Z" />
+        <path android:fillColor="#FFE9EEF5" android:pathData="M64,36 L80,30 L80,80 L64,80 Z" />
+        <path android:strokeColor="#FFB3BFD2" android:strokeWidth="3" android:strokeLineCap="round" android:pathData="M34,48 L74,60" />
+        <path android:strokeColor="#FFB3BFD2" android:strokeWidth="3" android:strokeLineCap="round" android:pathData="M50,36 L60,76" />
+        <path android:strokeColor="#FFC6D0DF" android:strokeWidth="2" android:strokeLineCap="round" android:pathData="M36,66 L70,42" />
+    </group>
+    <!-- Position -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M49,55 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0 Z" />
+    <path android:fillColor="#FF7CC4FF" android:pathData="M51,55 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z" />
+</vector>

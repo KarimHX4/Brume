@@ -7,4 +7,5 @@
     <color name="ok">#FF5FD39A</color>
     <color name="warn">#FFFFB454</color>
     <color name="muted">#FF8F98AD</color>
+    <color name="icon_bg">#FF121826</color>
 </resources>
