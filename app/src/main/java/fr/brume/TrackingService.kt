@@ -30,6 +30,9 @@ class TrackingService : Service(), LocationListener {
         private const val NOTIF_ID = 1
         @Volatile var running = false
             private set
+        /** Exploration allumée mais localisation du téléphone coupée : reprend toute seule. */
+        @Volatile var paused = false
+            private set
 
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, TrackingService::class.java))
@@ -79,9 +82,6 @@ class TrackingService : Service(), LocationListener {
         } catch (e: Exception) {
             e.printStackTrace(); stopSelf(); return START_NOT_STICKY
         }
-        if (!running && !locationOn(this)) {
-            stopSelf(); return START_NOT_STICKY
-        }
         if (!running) {
             // GPS dehors + réseau (Wi-Fi / antennes) pour avoir une position aussi à l'intérieur
             var ok = 0
@@ -94,6 +94,7 @@ class TrackingService : Service(), LocationListener {
             if (ok == 0) { stopSelf(); return START_NOT_STICKY }
             seedLastKnown()
             running = true
+            paused = !locationOn(this)
             Fog.breakPath()
             Fog.addListener(listener)
             getSharedPreferences("brume", MODE_PRIVATE).edit().putBoolean("tracking", true).apply()
@@ -106,6 +107,7 @@ class TrackingService : Service(), LocationListener {
         try { lm.removeUpdates(this) } catch (e: Exception) { }
         Fog.removeListener(listener)
         running = false
+        paused = false
         getSharedPreferences("brume", MODE_PRIVATE).edit().putBoolean("tracking", false).apply()
         Fog.flushAsync()
         Fog.notifyChanged()
@@ -129,7 +131,9 @@ class TrackingService : Service(), LocationListener {
         else if (now - lastGpsAt < 15_000) return
         val acc = if (loc.hasAccuracy()) loc.accuracy else 0f
         val spd = if (loc.hasSpeed()) loc.speed.toDouble() else -1.0
-        Fog.me = doubleArrayOf(loc.latitude, loc.longitude, acc.toDouble(), spd)
+        val brg = if (loc.hasBearing() && spd >= 1.0) loc.bearing.toDouble() else -1.0
+        Fog.me = doubleArrayOf(loc.latitude, loc.longitude, acc.toDouble(), spd, brg)
+        if (paused) { paused = false; updateNotif() }
         if (acc <= Fog.maxAcc) {
             Fog.addFix(loc.latitude, loc.longitude, loc.elapsedRealtimeNanos / 1_000_000L)
             Geocoder.maybe(loc.latitude, loc.longitude)
@@ -140,14 +144,12 @@ class TrackingService : Service(), LocationListener {
     // Obligatoires sur Android < 11 (méthodes non « default » à l'époque)
     @Deprecated("Deprecated in Java")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-    override fun onProviderEnabled(provider: String) {}
+    override fun onProviderEnabled(provider: String) {
+        // Localisation rallumée : l'exploration reprend sans ouvrir l'app
+        if (paused) { paused = false; Fog.breakPath(); lastNotif = 0; updateNotif(); Fog.notifyChanged() }
+    }
     override fun onProviderDisabled(provider: String) {
-        Fog.breakPath()
-        // Localisation du téléphone coupée : on arrête proprement l'exploration
-        if (!locationOn(this)) {
-            android.widget.Toast.makeText(this, "Localisation désactivée : exploration arrêtée", android.widget.Toast.LENGTH_LONG).show()
-            stopSelf()
-        }
+        if (!locationOn(this)) { paused = true; Fog.breakPath(); lastNotif = 0; updateNotif(); Fog.notifyChanged() }
     }
 
     private fun buildNotif(): Notification {
@@ -161,8 +163,8 @@ class TrackingService : Service(), LocationListener {
         )
         return Notification.Builder(this, CH_ID)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Brume explore la carte")
-            .setContentText(Fog.summary())
+            .setContentTitle(if (paused) "Brume en pause" else "Brume explore la carte")
+            .setContentText(if (paused) "Reprend dès que tu rallumes la localisation" else Fog.summary())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)

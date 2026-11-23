@@ -57,6 +57,7 @@ class MainActivity : Activity() {
     private lateinit var panel: View
     private lateinit var panelTitle: TextView
     private lateinit var panelBody: LinearLayout
+    private lateinit var meView: MeView
     private var follow = true
     private var centeredOnce = false
     private var panelMode = ""
@@ -74,6 +75,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQ_PERM = 1
+        private const val REQ_BG = 2
         private const val REQ_OPEN = 10
         private const val REQ_SAVE = 11
 
@@ -119,6 +121,13 @@ class MainActivity : Activity() {
         map.minZoomLevel = 3.0
         map.maxZoomLevel = 19.0
         map.overlays.add(FogOverlay())
+        meView = MeView(this, map)
+        findViewById<FrameLayout>(R.id.root).addView(meView, 1,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        map.addMapListener(object : org.osmdroid.events.MapListener {
+            override fun onScroll(event: org.osmdroid.events.ScrollEvent?): Boolean { meView.invalidate(); return false }
+            override fun onZoom(event: org.osmdroid.events.ZoomEvent?): Boolean { meView.invalidate(); return false }
+        })
         map.overlays.add(CopyrightOverlay(this).apply {
             setTextColor(0x99FFFFFF.toInt())
             setTextSize(9)
@@ -236,11 +245,11 @@ class MainActivity : Activity() {
     }
 
     private fun launchService() {
-        if (!TrackingService.locationOn(this)) { askLocationOn(); return }
         follow = true
         centeredOnce = false
         seedLastKnown()
         TrackingService.start(this)
+        if (!TrackingService.locationOn(this)) toast("En pause : l'exploration démarrera dès que tu activeras la localisation")
         val prefs = getSharedPreferences("brume", MODE_PRIVATE)
         if (!prefs.getBoolean("askedBattery", false) && !ignoringBattery()) {
             prefs.edit().putBoolean("askedBattery", true).apply()
@@ -255,6 +264,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_BG) { if (panel.visibility == View.VISIBLE) rebuildPanel(); return }
         if (requestCode != REQ_PERM) return
         when {
             hasLoc() -> launchService()
@@ -293,6 +303,7 @@ class MainActivity : Activity() {
         } else {
             cityLabel.text = if (on) "Exploration en cours" else "Brume"
             cityName.text = when {
+                on && TrackingService.paused -> "En pause · rallume la localisation"
                 on && m == null -> "Recherche de ta position…"
                 on -> "Identification de la commune…"
                 Fog.totalCells == 0L -> "Touche Explorer pour dissiper la brume"
@@ -307,6 +318,7 @@ class MainActivity : Activity() {
         val good = on && m != null && m[2] <= Fog.maxAcc
         gps.text = when {
             !on -> "GPS éteint"
+            TrackingService.paused -> "Localisation coupée"
             m == null -> "Recherche…"
             else -> buildString {
                 if (m[3] >= 1.0) append("${(m[3] * 3.6).roundToInt()} km/h · ")
@@ -314,14 +326,18 @@ class MainActivity : Activity() {
                 if (m[2] > Fog.maxAcc) append(" · trop imprécis")
             }
         }
-        val gc = when { !on -> muted; good -> green; else -> warn }
+        val gc = when { !on -> muted; good && !TrackingService.paused -> green; else -> warn }
         gps.setTextColor(if (on) gc else muted)
         gpsDot.backgroundTintList = ColorStateList.valueOf(gc)
 
         // Bouton principal
-        bTrackText.text = if (on) "En cours" else "Explorer"
+        val paused = on && TrackingService.paused
+        bTrackText.text = when { paused -> "En pause"; on -> "En cours"; else -> "Explorer" }
         bTrackIcon.setImageResource(if (on) R.drawable.ic_pause else R.drawable.ic_play)
-        bTrack.backgroundTintList = ColorStateList.valueOf(if (on) green else accent)
+        bTrack.backgroundTintList = ColorStateList.valueOf(when { paused -> warn; on -> green; else -> accent })
+        meView.active = on
+        meView.paused = paused
+        meView.invalidate()
 
         if (m != null && !centeredOnce) {
             centeredOnce = true
@@ -488,7 +504,7 @@ class MainActivity : Activity() {
         panelTitle.text = "Réglages"
         section("Exploration")
         settingRow("Rayon de découverte", "Appliqué aux prochains trajets", "${Fog.radius.toInt()} m") {
-            val opts = listOf(15, 20, 25, 30)
+            val opts = listOf(15, 20, 25, 30, 40, 50)
             Fog.radius = opts[(opts.indexOf(Fog.radius.toInt()) + 1) % opts.size].toDouble()
             Fog.savePrefs(this); rebuildPanel()
         }
@@ -496,6 +512,14 @@ class MainActivity : Activity() {
             val opts = listOf(20, 30, 40, 50, 60, 100)
             Fog.maxAcc = opts[(opts.indexOf(Fog.maxAcc.toInt()) + 1) % opts.size].toFloat()
             Fog.savePrefs(this); rebuildPanel()
+        }
+        val okBg = checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+        settingRow("Relance automatique",
+            if (okBg) "Après un redémarrage du téléphone ou une mise à jour" else "Choisis « Toujours autoriser » pour la position",
+            if (okBg) "✓" else null, if (okBg) green else warn) {
+            if (okBg) toast("C'est déjà bon ✓")
+            else if (!hasLoc()) toast("Lance d'abord une exploration")
+            else requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), REQ_BG)
         }
         val okBatt = ignoringBattery()
         settingRow("Batterie sans restriction",

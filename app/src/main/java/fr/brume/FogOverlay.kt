@@ -67,12 +67,5 @@ class FogOverlay : Overlay() {
             }
         }
         c.restoreToCount(layer)
-
-        val m = Fog.me ?: return
-        gp.setCoords(m[0], m[1]); pj.toPixels(gp, p0)
-        val accPx = pj.metersToPixels(m[2].toFloat())
-        if (accPx > 16f) c.drawCircle(p0.x.toFloat(), p0.y.toFloat(), accPx, accPaint)
-        c.drawCircle(p0.x.toFloat(), p0.y.toFloat(), 14f, meFill)
-        c.drawCircle(p0.x.toFloat(), p0.y.toFloat(), 14f, meStroke)
     }
 }
