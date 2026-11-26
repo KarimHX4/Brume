@@ -18,13 +18,25 @@ import kotlin.math.max
 
 /** Dessine le brouillard par-dessus la carte puis « gomme » les cellules dévoilées. */
 class FogOverlay : Overlay() {
-    private val fogColor = 0xF0101626.toInt()
-    // Texture de nuages qui donne du relief à la brume
-    private val mist = Paint().apply {
-        shader = BitmapShader(makeNoise(256), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+    // Texture de nuages, en deux couches d'échelles différentes fondues l'une dans l'autre :
+    // elle grossit avec la carte au zoom, sans saut ni effet stroboscopique
+    private val noise = makeNoise(256)
+    private val mistA = Paint(Paint.FILTER_BITMAP_FLAG).apply { shader = BitmapShader(noise, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT) }
+    private val mistB = Paint(Paint.FILTER_BITMAP_FLAG).apply { shader = BitmapShader(noise, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT) }
+    private val mA = Matrix()
+    private val mB = Matrix()
+    private var anchor: GeoPoint? = null
+    private val ap = Point()
+
+    private fun layer(paint: Paint, m: Matrix, scale: Float, weight: Float, c: Canvas) {
+        if (weight <= 0.02f) return
+        val period = 256f * scale
+        m.setScale(scale, scale)
+        m.postTranslate(ap.x.toFloat() % period, ap.y.toFloat() % period)
+        paint.shader.setLocalMatrix(m)
+        paint.alpha = (weight * 255).toInt()
+        c.drawPaint(paint)
     }
-    private val mistMatrix = Matrix()
-    private val origin = GeoPoint(0.0, 0.0)
     private val clear = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
     // Halo semi-transparent autour des zones dévoilées : bords de brume adoucis
     private val soft = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT); alpha = 70 }
@@ -41,13 +53,21 @@ class FogOverlay : Overlay() {
         val pj = mv.projection
         val bb = mv.boundingBox
         val layer = c.saveLayer(null, null)
-        c.drawColor(fogColor)
-        // La texture suit la carte quand on la déplace
-        pj.toPixels(origin, p0)
-        mistMatrix.setScale(2.6f, 2.6f)
-        mistMatrix.postTranslate(p0.x.toFloat() % 665.6f, p0.y.toFloat() % 665.6f)
-        mist.shader.setLocalMatrix(mistMatrix)
-        c.drawPaint(mist)
+        val a = (Fog.fogAlpha.coerceIn(30, 95) * 255 / 100)
+        c.drawColor((a shl 24) or 0x101626)
+        // Texture accrochée à un point de la carte proche de l'écran
+        var an = anchor
+        if (an != null) pj.toPixels(an, ap)
+        if (an == null || abs(ap.x) > 100_000 || abs(ap.y) > 100_000) {
+            val ctr = mv.mapCenter
+            an = GeoPoint(ctr.latitude, ctr.longitude); anchor = an
+            pj.toPixels(an, ap)
+        }
+        val z = mv.zoomLevelDouble
+        val f = (z - Math.floor(z)).toFloat()
+        val s0 = (1.8 * Math.pow(2.0, f.toDouble())).toFloat()
+        layer(mistA, mA, s0, f, c)            // petite échelle : apparaît en zoomant
+        layer(mistB, mB, s0 * 2f, 1f - f, c)  // grande échelle : s'efface en zoomant
         synchronized(Fog.lock) {
             for ((k, bits) in Fog.chunks) {
                 val i0 = Fog.kci(k) * Fog.CH
@@ -120,7 +140,7 @@ class FogOverlay : Overlay() {
             val px = IntArray(size * size)
             for (i in px.indices) {
                 val v = ((acc[i] / total - 0.38f) / 0.42f).coerceIn(0f, 1f)
-                val a = (v * v * 95).toInt()
+                val a = (v * v * 75).toInt()
                 px[i] = (a shl 24) or (0xBF shl 16) or (0xCC shl 8) or 0xE6
             }
             return Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)

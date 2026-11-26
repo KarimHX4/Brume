@@ -55,6 +55,8 @@ object Fog {
 
     @Volatile var radius = 20.0
     @Volatile var maxAcc = 50f
+    /** Opacité du brouillard en % (on doit encore deviner les routes dessous). */
+    @Volatile var fogAlpha = 70
     /** Dernière position connue : lat, lon, précision (m), vitesse (m/s ou -1). */
     @Volatile var me: DoubleArray? = null
 
@@ -68,6 +70,7 @@ object Fog {
             val p = ctx.getSharedPreferences("brume", Context.MODE_PRIVATE)
             radius = p.getInt("radius", 20).toDouble()
             maxAcc = p.getInt("maxAcc", 50).toFloat()
+            fogAlpha = p.getInt("fogAlpha", 70)
             val s = Store(ctx.applicationContext)
             store = s
             try { s.load(chunks, cities) } catch (e: Exception) { e.printStackTrace() }
@@ -80,7 +83,7 @@ object Fog {
 
     fun savePrefs(ctx: Context) {
         ctx.getSharedPreferences("brume", Context.MODE_PRIVATE).edit()
-            .putInt("radius", radius.toInt()).putInt("maxAcc", maxAcc.toInt()).apply()
+            .putInt("radius", radius.toInt()).putInt("maxAcc", maxAcc.toInt()).putInt("fogAlpha", fogAlpha).apply()
     }
 
     fun addListener(l: () -> Unit) { listeners.add(l) }

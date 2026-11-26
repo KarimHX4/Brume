@@ -524,6 +524,12 @@ class MainActivity : Activity() {
         section("Carte")
         val st = MapStyles.all[getSharedPreferences("brume", MODE_PRIVATE).getInt("style", 0).coerceIn(0, MapStyles.all.size - 1)]
         settingRow("Style de carte", st.desc, st.name) { chooseStyle() }
+        val fogNames = mapOf(55 to "Légère", 70 to "Moyenne", 85 to "Dense")
+        settingRow("Intensité du brouillard", "Laisse plus ou moins deviner la carte dessous", fogNames[Fog.fogAlpha] ?: "${Fog.fogAlpha} %") {
+            val opts = listOf(55, 70, 85)
+            Fog.fogAlpha = opts[(opts.indexOf(Fog.fogAlpha) + 1) % opts.size]
+            Fog.savePrefs(this); map.invalidate(); rebuildPanel()
+        }
         section("Exploration")
         settingRow("Rayon de découverte", "Appliqué aux prochains trajets", "${Fog.radius.toInt()} m") {
             val opts = listOf(15, 20, 25, 30, 40, 50)
