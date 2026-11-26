@@ -111,7 +111,6 @@ class MainActivity : Activity() {
         findViewById<ScrollView>(R.id.panelScroll).layoutParams.height =
             (resources.displayMetrics.heightPixels * 0.55).toInt()
 
-        map.setTileSource(TileSourceFactory.MAPNIK)
         map.setTilesScaledToDpi(true)
         map.setMultiTouchControls(true)
         map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
@@ -120,6 +119,7 @@ class MainActivity : Activity() {
         map.setScrollableAreaLimitLatitude(MapView.getTileSystem().maxLatitude, MapView.getTileSystem().minLatitude, 0)
         map.minZoomLevel = 3.0
         map.maxZoomLevel = 19.0
+        MapStyles.apply(map, getSharedPreferences("brume", MODE_PRIVATE).getInt("style", 0))
         map.overlays.add(FogOverlay())
         meView = MeView(this, map)
         findViewById<FrameLayout>(R.id.root).addView(meView, 1,
@@ -155,6 +155,7 @@ class MainActivity : Activity() {
             if (m != null) zoomAround(m[0], m[1], true)
             else if (!TrackingService.running) startTracking()
         }
+        findViewById<View>(R.id.bStyle).setOnClickListener { press(it); chooseStyle() }
         findViewById<View>(R.id.bCities).setOnClickListener { press(it); showPanel("cities") }
         findViewById<View>(R.id.bSettings).setOnClickListener { press(it); showPanel("settings") }
         findViewById<View>(R.id.panelClose).setOnClickListener { hidePanel() }
@@ -207,12 +208,15 @@ class MainActivity : Activity() {
         val top = findViewById<View>(R.id.topCard)
         val bottom = findViewById<View>(R.id.bottomBar)
         val center = findViewById<View>(R.id.bCenter)
+        val style = findViewById<View>(R.id.bStyle)
         findViewById<View>(R.id.root).setOnApplyWindowInsetsListener { _, ins ->
             val t = ins.systemWindowInsetTop
             val b = ins.systemWindowInsetBottom
             (top.layoutParams as FrameLayout.LayoutParams).topMargin = t + dp(8)
             (bottom.layoutParams as FrameLayout.LayoutParams).bottomMargin = b + dp(18)
             (center.layoutParams as FrameLayout.LayoutParams).bottomMargin = b + dp(92)
+            (style.layoutParams as FrameLayout.LayoutParams).bottomMargin = b + dp(154)
+            style.requestLayout()
             (banner.layoutParams as FrameLayout.LayoutParams).topMargin = t + dp(130)
             top.requestLayout(); bottom.requestLayout(); center.requestLayout(); banner.requestLayout()
             panel.setPadding(dp(16), dp(10), dp(16), b + dp(16))
@@ -500,8 +504,26 @@ class MainActivity : Activity() {
         map.invalidate()
     }
 
+    private fun chooseStyle() {
+        val cur = getSharedPreferences("brume", MODE_PRIVATE).getInt("style", 0)
+        val names = MapStyles.all.map { "${it.name} · ${it.desc}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Style de carte")
+            .setSingleChoiceItems(names, cur) { dlg, which ->
+                getSharedPreferences("brume", MODE_PRIVATE).edit().putInt("style", which).apply()
+                MapStyles.apply(map, which)
+                if (panel.visibility == View.VISIBLE && panelMode == "settings") rebuildPanel()
+                dlg.dismiss()
+            }
+            .setNegativeButton("Fermer", null)
+            .show()
+    }
+
     private fun buildSettings() {
         panelTitle.text = "Réglages"
+        section("Carte")
+        val st = MapStyles.all[getSharedPreferences("brume", MODE_PRIVATE).getInt("style", 0).coerceIn(0, MapStyles.all.size - 1)]
+        settingRow("Style de carte", st.desc, st.name) { chooseStyle() }
         section("Exploration")
         settingRow("Rayon de découverte", "Appliqué aux prochains trajets", "${Fog.radius.toInt()} m") {
             val opts = listOf(15, 20, 25, 30, 40, 50)

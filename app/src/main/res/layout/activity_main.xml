@@ -133,6 +133,20 @@
         android:textStyle="bold"
         android:visibility="gone" />
 
+    <!-- Bouton style de carte -->
+    <ImageButton
+        android:id="@+id/bStyle"
+        android:layout_width="52dp"
+        android:layout_height="52dp"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="164dp"
+        android:background="@drawable/circle_btn"
+        android:contentDescription="Style de carte"
+        android:elevation="8dp"
+        android:src="@drawable/ic_layers"
+        android:tint="@color/fg" />
+
     <!-- Bouton recentrer -->
     <ImageButton
         android:id="@+id/bCenter"

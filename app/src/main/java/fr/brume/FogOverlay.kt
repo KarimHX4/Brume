@@ -1,6 +1,10 @@
 package fr.brume
 
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Shader
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Point
@@ -14,7 +18,13 @@ import kotlin.math.max
 
 /** Dessine le brouillard par-dessus la carte puis « gomme » les cellules dévoilées. */
 class FogOverlay : Overlay() {
-    private val fogColor = 0xEB121826.toInt()
+    private val fogColor = 0xF0101626.toInt()
+    // Texture de nuages qui donne du relief à la brume
+    private val mist = Paint().apply {
+        shader = BitmapShader(makeNoise(256), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+    }
+    private val mistMatrix = Matrix()
+    private val origin = GeoPoint(0.0, 0.0)
     private val clear = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
     // Halo semi-transparent autour des zones dévoilées : bords de brume adoucis
     private val soft = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT); alpha = 70 }
@@ -32,6 +42,12 @@ class FogOverlay : Overlay() {
         val bb = mv.boundingBox
         val layer = c.saveLayer(null, null)
         c.drawColor(fogColor)
+        // La texture suit la carte quand on la déplace
+        pj.toPixels(origin, p0)
+        mistMatrix.setScale(2.6f, 2.6f)
+        mistMatrix.postTranslate(p0.x.toFloat() % 665.6f, p0.y.toFloat() % 665.6f)
+        mist.shader.setLocalMatrix(mistMatrix)
+        c.drawPaint(mist)
         synchronized(Fog.lock) {
             for ((k, bits) in Fog.chunks) {
                 val i0 = Fog.kci(k) * Fog.CH
@@ -67,5 +83,47 @@ class FogOverlay : Overlay() {
             }
         }
         c.restoreToCount(layer)
+    }
+
+    companion object {
+        private fun smooth(t: Float) = t * t * (3 - 2 * t)
+
+        /** Bruit de valeur multi-octaves, raccordable sur les bords (motif répétable sans couture). */
+        fun makeNoise(size: Int): Bitmap {
+            val rnd = java.util.Random(42)
+            val acc = FloatArray(size * size)
+            var amp = 1f
+            var total = 0f
+            for (cells in intArrayOf(3, 6, 12, 24, 48)) {
+                val g = FloatArray(cells * cells) { rnd.nextFloat() }
+                val step = size.toFloat() / cells
+                for (y in 0 until size) {
+                    val gy = y / step
+                    val y0 = gy.toInt()
+                    val fy = smooth(gy - y0)
+                    val ya = (y0 % cells) * cells
+                    val yb = ((y0 + 1) % cells) * cells
+                    for (x in 0 until size) {
+                        val gx = x / step
+                        val x0 = gx.toInt()
+                        val fx = smooth(gx - x0)
+                        val xa = x0 % cells
+                        val xb = (x0 + 1) % cells
+                        val top = g[ya + xa] + (g[ya + xb] - g[ya + xa]) * fx
+                        val bot = g[yb + xa] + (g[yb + xb] - g[yb + xa]) * fx
+                        acc[y * size + x] += amp * (top + (bot - top) * fy)
+                    }
+                }
+                total += amp
+                amp *= 0.55f
+            }
+            val px = IntArray(size * size)
+            for (i in px.indices) {
+                val v = ((acc[i] / total - 0.38f) / 0.42f).coerceIn(0f, 1f)
+                val a = (v * v * 95).toInt()
+                px[i] = (a shl 24) or (0xBF shl 16) or (0xCC shl 8) or 0xE6
+            }
+            return Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)
+        }
     }
 }
