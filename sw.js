@@ -1,5 +1,5 @@
 // Brume : met en cache l'application pour qu'elle s'ouvre même sans réseau.
-const CACHE = 'brume-v5';
+const CACHE = 'brume-v6';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/apple-touch-icon.png', './icons/icon-192.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });

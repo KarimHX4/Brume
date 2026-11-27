@@ -65,8 +65,8 @@
   .item .top span:first-child{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .item .top span:last-child{color:var(--acc)}
   .item small{display:block;color:var(--mut);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item .prog{height:5px}
-  .tog{color:var(--acc);font-weight:700;font-size:13px;padding-top:10px}
-  .dbox{margin:-2px 0 8px 30px}
+  .tog{color:var(--acc);font-weight:700;font-size:12px;padding-top:8px}
+  .back{color:var(--acc);font-weight:700;font-size:14px;padding:2px 4px 10px;cursor:pointer}
   .ditem{background:#1c2333;border-radius:12px;padding:9px 12px 10px;margin-bottom:6px;cursor:pointer}
   .ditem .top{display:flex;gap:8px;font-weight:700;font-size:14px}
   .ditem .top span:first-child{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .ditem .top span:last-child{color:var(--acc)}
@@ -255,16 +255,47 @@ function forBits(bits, fn){
 }
 
 const geoQueue = []; let geoRunning = false, lastQueued = null;
+const dMisses = [], dQueue = [];
+let noDistricts = new Set(); try { noDistricts = new Set(JSON.parse(localStorage.getItem('brume.noDistricts') || '[]')); } catch(e){}
 function maybeGeocode(pt, force){
-  if (cityAt(pt.lat, pt.lon)) return;
+  const c = cityAt(pt.lat, pt.lon);
+  if (c){
+    // Dans une commune connue : on cherche son arrondissement (Paris, Lyon, Marseille…)
+    if (noDistricts.has(c.id) || (c.districts && c.districts.some(d => inCity(d, pt.lat, pt.lon)))) return;
+    if (dMisses.some(m => dist(m, pt) < 300) || dQueue.some(q => dist(q.pt, pt) < 400)) return;
+    dQueue.push({ c, pt }); runGeo(); return;
+  }
   if (misses.some(m => dist(m, pt) < 800)) return;
   if (!force && lastQueued && dist(lastQueued, pt) < 300) return;
   if (geoQueue.some(q => dist(q, pt) < 500)) return;
   lastQueued = pt; geoQueue.push(pt); runGeo();
 }
+const naturalCmp = (a, b) => { const na = +(a.name.match(/\d+/) || [NaN])[0], nb = +(b.name.match(/\d+/) || [NaN])[0];
+  return (!isNaN(na) && !isNaN(nb) && na !== nb) ? na - nb : a.name.localeCompare(b.name, 'fr'); };
+async function districtWork(c, pt){
+  if (noDistricts.has(c.id) || (c.districts && c.districts.some(d => inCity(d, pt.lat, pt.lon)))) return;
+  try {
+    const d = await (await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=12&polygon_geojson=1&polygon_threshold=0.00005&accept-language=fr&lat=${pt.lat}&lon=${pt.lon}`)).json();
+    const id = d.osm_type + d.osm_id, g = d.geojson;
+    if (id === c.id){ noDistricts.add(c.id); try { localStorage.setItem('brume.noDistricts', JSON.stringify([...noDistricts])); } catch(e){} return; }
+    if (g && (g.type === 'Polygon' || g.type === 'MultiPolygon') && (d.addresstype === 'city_district' || d.addresstype === 'borough' || d.place_rank === 18)){
+      let name = d.name || 'Arrondissement';
+      if (name.toLowerCase().startsWith(c.name.toLowerCase() + ' ')) name = name.slice(c.name.length + 1);
+      name = name.charAt(0).toUpperCase() + name.slice(1);
+      const bbox = bboxOf(g), dd = { id, name, geo: g, bbox, area: areaOf(g, bbox), n: 0 };
+      if (!inCity(dd, pt.lat, pt.lon)){ dMisses.push(pt); return; }
+      c.districts = c.districts || [];
+      if (c.districts.some(x => x.id === id)) return;
+      dd.n = countIn(dd); c.districts.push(dd); c.districts.sort(naturalCmp);
+      dirtyCities.add(c.id); banner('Nouvel arrondissement · ' + name);
+      refreshUI(); if (sheetOpen && sheetMode !== 'settings') renderSheet();
+    } else dMisses.push(pt);
+  } catch(e){ /* réseau : on réessaiera au prochain passage */ }
+}
 async function runGeo(){
   if (geoRunning) return; geoRunning = true;
-  while (geoQueue.length){
+  while (geoQueue.length || dQueue.length){
+    if (!geoQueue.length){ await districtWork(dQueue[0].c, dQueue[0].pt); dQueue.shift(); await sleep(1200); continue; }
     const pt = geoQueue.shift();
     if (cityAt(pt.lat, pt.lon) || misses.some(m => dist(m, pt) < 800)) continue;
     try {
@@ -351,53 +382,6 @@ applyStyle(S.style);
 try { const v = JSON.parse(localStorage.getItem('brume.view') || 'null'); if (v) map.setView([v[0], v[1]], v[2]); } catch(e){}
 map.on('moveend', () => { try { const c = map.getCenter(); localStorage.setItem('brume.view', JSON.stringify([c.lat, c.lng, map.getZoom()])); } catch(e){} });
 
-/* ---------- Arrondissements / quartiers ---------- */
-const dPending = new Set(), dFailed = new Map();
-const natural = (a, b) => { const na = +(a.name.match(/\d+/) || [NaN])[0], nb = +(b.name.match(/\d+/) || [NaN])[0];
-  return (!isNaN(na) && !isNaN(nb) && na !== nb) ? na - nb : a.name.localeCompare(b.name, 'fr'); };
-const dLabel = ds => !ds ? 'Arrondissements et quartiers' : ds.some(d => /rrondissement/i.test(d.name)) ? 'Arrondissements' : 'Quartiers';
-async function loadDistricts(c, auto){
-  if (c.districts || dPending.has(c.id)) return;
-  if (auto && dFailed.has(c.id) && Date.now() - dFailed.get(c.id) < 600000) return;
-  dPending.add(c.id);
-  try {
-    let list = [];
-    if (c.id.startsWith('relation')){
-      const rel = c.id.slice(8);
-      const q = `[out:json][timeout:40];rel(${rel});map_to_area->.a;rel(area.a)["boundary"="administrative"]["admin_level"~"^(9|10)$"];out tags;`;
-      const js = await (await fetch('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(q))).json();
-      const l9 = [], l10 = [];
-      for (const e of js.elements || []){ const lv = e.tags && e.tags.admin_level; if (lv === '9') l9.push(e.id); else if (lv === '10') l10.push(e.id); }
-      const lookup = async ids => {
-        const out = [];
-        for (let i = 0; i < Math.min(ids.length, 120); i += 40){
-          await sleep(1100);
-          const part = ids.slice(i, i + 40).map(x => 'R' + x).join(',');
-          const arr = await (await fetch(`https://nominatim.openstreetmap.org/lookup?format=jsonv2&polygon_geojson=1&polygon_threshold=0.00002&accept-language=fr&osm_ids=${part}`)).json();
-          for (const o of arr){
-            const g = o.geojson; if (!g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon')) continue;
-            if (!inCity(c, +o.lat, +o.lon)) continue;
-            let name = o.name || String(o.display_name || '').split(',')[0];
-            if (name.toLowerCase().startsWith(c.name.toLowerCase() + ' ')) name = name.slice(c.name.length + 1);
-            name = name.charAt(0).toUpperCase() + name.slice(1);
-            const bbox = bboxOf(g);
-            out.push({ id: 'relation' + o.osm_id, name, geo: g, bbox, area: areaOf(g, bbox), n: 0 });
-          }
-        }
-        return out;
-      };
-      list = await lookup(l9.length >= 2 ? l9 : l10);
-      if (list.length < 2 && l9.length >= 2 && l10.length >= 2) list = await lookup(l10);
-      if (list.length < 2) list = [];
-    }
-    list.sort(natural);
-    for (const d of list) d.n = countIn(d);
-    c.districts = list; dirtyCities.add(c.id); flush();
-  } catch(e){ console.error(e); dFailed.set(c.id, Date.now()); if (!auto) banner('Découpage indisponible, réessaie plus tard'); }
-  dPending.delete(c.id);
-  bordersKey = ''; refreshUI(); if (sheetOpen && sheetMode === 'cities') renderSheet();
-}
-
 /* ---------- Limites des villes ---------- */
 map.createPane('borders'); map.getPane('borders').style.zIndex = 460; map.getPane('borders').style.pointerEvents = 'none';
 const bordersLayer = L.layerGroup().addTo(map);
@@ -411,10 +395,6 @@ function drawBorders(force){
   if (!force && key === bordersKey) return;
   bordersKey = key; bordersLayer.clearLayers();
   if (!S.borders) return;
-  for (const c of cities.values()) if (c.districts) for (const d of c.districts){
-    if (d.id === cur) continue;
-    L.geoJSON(d.geo, { pane: 'borders', interactive: false, style: { color: '#fff', weight: 1, opacity: .55, dashArray: '2 4', fill: false } }).addTo(bordersLayer);
-  }
   const fa = cur && !cities.has(cur) ? findArea(cur) : null;
   if (fa){
     L.geoJSON(fa.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 10, opacity: .25, fill: false } }).addTo(bordersLayer);
@@ -527,9 +507,7 @@ function refreshUI(){
   drawBorders();
   const c = me ? cityAt(me.lat, me.lon) : null;
   if (c){
-    if (!c.districts) loadDistricts(c, true);
-    const d = c.districts ? c.districts.find(x => inCity(x, me.lat, me.lon)) : null;
-    $('cLabel').textContent = d ? `${d.name} · ${fmtPct(pct(d))}` : (c.sub || 'Ville actuelle'); $('cName').textContent = c.name; $('cPct').textContent = fmtPct(pct(c));
+    $('cLabel').textContent = c.sub || 'Ville actuelle'; $('cName').textContent = c.name; $('cPct').textContent = fmtPct(pct(c));
     $('cProg').style.display = ''; $('cBar').style.width = Math.max(pct(c), 0.5) + '%';
   } else {
     $('cLabel').textContent = tracking ? 'Exploration en cours' : 'Brume';
@@ -562,14 +540,33 @@ function dialog(title, text, buttons){
 
 /* Panneaux */
 let sheetOpen = false, sheetMode = '', outline = null;
-const expanded = new Set();
+const visited = c => (c.districts || []).filter(d => d.n > 0);
 function openSheet(mode){
   if (sheetOpen && sheetMode === mode){ closeSheet(); return; }
   sheetMode = mode; renderSheet(); sheetOpen = true;
   $('sheet').classList.add('open'); $('scrim').classList.add('open');
 }
 function closeSheet(){ sheetOpen = false; $('sheet').classList.remove('open'); $('scrim').classList.remove('open'); }
-function renderSheet(){ sheetMode === 'cities' ? renderCities() : renderSettings(); }
+function renderSheet(){ sheetMode === 'cities' ? renderCities() : sheetMode.startsWith('city:') ? renderCity(sheetMode.slice(5)) : renderSettings(); }
+/* Détail d'une ville : avancement global + arrondissements visités */
+function renderCity(id){
+  const c = cities.get(id); if (!c){ sheetMode = 'cities'; renderCities(); return; }
+  $('shTitle').textContent = c.name;
+  const ds = visited(c);
+  let h = `<div class="back" data-back="1">‹  Mes villes</div>
+    <div class="tiles"><div class="tile"><b>${fmtPct(pct(c))}</b><small>de la ville</small></div>
+    <div class="tile"><b>${fmtArea(c.n * CELL * CELL)}</b><small>dévoilés</small></div>
+    <div class="tile"><b>${ds.length}</b><small>${ds.length > 1 ? 'arrondissements' : 'arrondissement'}</small></div></div>
+    <button class="set" data-show="${esc(c.id)}"><div class="c"><b>Voir sur la carte</b><small>Cadrer la ville et afficher ses limites</small></div><span class="chev">›</span></button>
+    <div class="sec">Arrondissements visités</div>`;
+  for (const d of ds){
+    const v = pct(d);
+    h += `<div class="ditem" data-did="${esc(d.id)}"><div class="top"><span>${esc(d.name)}</span><span>${fmtPct(v)}</span></div>
+      <div class="prog" style="height:4px;margin-top:6px"><i style="width:${Math.max(v, 0.5)}%"></i></div></div>`;
+  }
+  h += `<div class="note">Un arrondissement apparaît ici dès que tu y passes. Touche-le pour le voir sur la carte.</div>`;
+  $('shBody').innerHTML = h;
+}
 function renderCities(){
   $('shTitle').textContent = 'Mes villes';
   const list = [...cities.values()].sort((a, b) => pct(b) - pct(a));
@@ -583,18 +580,8 @@ function renderCities(){
       <div class="top"><span>${esc(c.name)}</span><span>${fmtPct(v)}</span></div>
       <small>${fmtArea(c.n * CELL * CELL)} sur ${fmtArea(c.area)}${c.sub ? ' · ' + esc(c.sub) : ''}</small>
       <div class="prog"><i style="width:${Math.max(v, 0.5)}%"></i></div>
-      ${(!c.districts || c.districts.length) ? `<div class="tog" data-tog="${esc(c.id)}">${expanded.has(c.id) ? '▴' : '▾'} ${dLabel(c.districts)}${c.districts ? ' (' + c.districts.length + ')' : ''}</div>` : ''}
+      ${visited(c).length ? `<div class="tog">${visited(c).length} arrondissement${visited(c).length > 1 ? 's visités' : ' visité'}  ›</div>` : ''}
       </div></div>`;
-    if (expanded.has(c.id)){
-      h += '<div class="dbox">';
-      if (!c.districts) h += `<div class="note">${dPending.has(c.id) ? 'Chargement du découpage…' : 'Touche pour réessayer'}</div>`;
-      else for (const d of c.districts){
-        const dv = pct(d);
-        h += `<div class="ditem" data-did="${esc(d.id)}"><div class="top"><span${d.n ? '' : ' style="color:var(--mut)"'}>${esc(d.name)}</span><span${d.n ? '' : ' style="color:var(--mut)"'}>${d.n ? fmtPct(dv) : '—'}</span></div>
-          <div class="prog" style="height:4px;margin-top:6px"><i style="width:${d.n ? Math.max(dv, 0.5) : 0}%"></i></div></div>`;
-      }
-      h += '</div>';
-    }
   });
   if (list.length) h += `<div class="note">Touche une ville pour voir ses limites. Le % compare la surface dévoilée à la surface officielle de la commune (OpenStreetMap).</div>`;
   $('shBody').innerHTML = h;
@@ -617,7 +604,7 @@ function renderSettings(){
   h += setRow('Importer un historique', 'Google Maps « Vos trajets », GPX ou sauvegarde Brume (y compris de l\'app Android)', null, 'import');
   h += setRow('Exporter mes données', 'Fichier JSON, réimportable dans l\'app Android', null, 'export');
   h += setRow('Tout effacer', 'Carte découverte et villes', null, 'reset', 'var(--bad)');
-  h += `<div class="note" style="text-align:center">${totalCells.toLocaleString('fr-FR')} cellules de 10 m · Brume web 2.1</div>`;
+  h += `<div class="note" style="text-align:center">${totalCells.toLocaleString('fr-FR')} cellules de 10 m · Brume web 2.2</div>`;
   $('shBody').innerHTML = h;
 }
 const cycle = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
@@ -627,26 +614,24 @@ $('shBody').addEventListener('input', e => {
   S.fog = +e.target.value; $('fogVal').textContent = S.fog + ' %'; $('fogDesc').textContent = fogDesc(S.fog); redraw();
 });
 $('shBody').addEventListener('change', e => { if (e.target.id === 'fogRange') saveSettings(); });
+function showArea(a){
+  follow = false; focusId = a.id; drawBorders(true);
+  map.fitBounds([[a.bbox[1], a.bbox[0]], [a.bbox[3], a.bbox[2]]], { padding: [40, 40] });
+  closeSheet(); banner(`${a.name} · ${fmtPct(pct(a))}`);
+}
 $('shBody').addEventListener('click', e => {
-  const tog = e.target.closest('.tog');
-  if (tog){
-    const id = tog.dataset.tog, c = cities.get(id);
-    if (expanded.has(id)) expanded.delete(id); else { expanded.add(id); if (c) loadDistricts(c, false); }
-    renderSheet(); return;
-  }
+  if (e.target.closest('.back')){ sheetMode = 'cities'; renderSheet(); return; }
+  const sh = e.target.closest('[data-show]');
+  if (sh){ const c = cities.get(sh.dataset.show); if (c) showArea(c); return; }
   const di = e.target.closest('.ditem');
   if (di){
-    const d = findArea(di.dataset.did); if (!d) return;
-    follow = false; focusId = d.id; drawBorders(true);
-    map.fitBounds([[d.bbox[1], d.bbox[0]], [d.bbox[3], d.bbox[2]]], { padding: [40, 40] });
-    closeSheet(); banner(`${d.name} · ${d.n ? fmtPct(pct(d)) : '0 %'}`); return;
+    const d = findArea(di.dataset.did); if (d) showArea(d); return;
   }
   const item = e.target.closest('.item');
   if (item){
     const c = cities.get(item.dataset.id); if (!c) return;
-    follow = false; focusId = c.id; drawBorders(true);
-    map.fitBounds([[c.bbox[1], c.bbox[0]], [c.bbox[3], c.bbox[2]]], { padding: [40, 40] });
-    closeSheet(); banner(`${c.name} · ${fmtPct(pct(c))}`); return;
+    if (visited(c).length){ sheetMode = 'city:' + c.id; renderSheet(); $('sheet').scrollTop = 0; return; }
+    showArea(c); return;
   }
   const b = e.target.closest('.set'); if (!b || !b.dataset.act) return;
   switch (b.dataset.act){
