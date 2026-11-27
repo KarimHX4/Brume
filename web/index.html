@@ -128,7 +128,7 @@
 /* ---------- Grille : cellules de ~10 m × 10 m ---------- */
 const CELL = 10, MPD = 111320, DLAT = CELL / MPD, CH = 64; // chunks de 64×64 cellules (~640 m)
 const RAD = Math.PI / 180;
-const S = Object.assign({ radius: 20, maxAcc: 50, wake: true, fog: 70, style: 0 }, safeJSON(localStorage.getItem('brume.settings')));
+const S = Object.assign({ radius: 20, maxAcc: 50, wake: true, fog: 70, style: 0, borders: true }, safeJSON(localStorage.getItem('brume.settings')));
 function safeJSON(s){ try { return JSON.parse(s) || {}; } catch(e){ return {}; } }
 function saveSettings(){ try { localStorage.setItem('brume.settings', JSON.stringify(S)); } catch(e){} }
 
@@ -335,6 +335,27 @@ applyStyle(S.style);
 try { const v = JSON.parse(localStorage.getItem('brume.view') || 'null'); if (v) map.setView([v[0], v[1]], v[2]); } catch(e){}
 map.on('moveend', () => { try { const c = map.getCenter(); localStorage.setItem('brume.view', JSON.stringify([c.lat, c.lng, map.getZoom()])); } catch(e){} });
 
+/* ---------- Limites des villes ---------- */
+map.createPane('borders'); map.getPane('borders').style.zIndex = 460; map.getPane('borders').style.pointerEvents = 'none';
+const bordersLayer = L.layerGroup().addTo(map);
+let focusId = null, bordersKey = '';
+function currentCityId(){ if (focusId) return focusId; const c = me ? cityAt(me.lat, me.lon) : null; return c ? c.id : null; }
+function drawBorders(force){
+  const cur = currentCityId();
+  const key = (S.borders ? 1 : 0) + '|' + cities.size + '|' + cur;
+  if (!force && key === bordersKey) return;
+  bordersKey = key; bordersLayer.clearLayers();
+  if (!S.borders) return;
+  for (const c of cities.values()){
+    const isCur = c.id === cur;
+    if (isCur) L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 10, opacity: .25, fill: false } }).addTo(bordersLayer);
+    L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: { color: '#000', weight: 4, opacity: .45, fill: false } }).addTo(bordersLayer);
+    L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: isCur
+      ? { color: '#7cc4ff', weight: 3, opacity: 1, fill: false }
+      : { color: '#fff', weight: 1.6, opacity: .85, dashArray: '7 5', fill: false } }).addTo(bordersLayer);
+  }
+}
+
 /* ---------- Brouillard ---------- */
 const fog = $('fog'), ctx = fog.getContext('2d');
 let raf = 0; const redraw = () => { if (!raf) raf = requestAnimationFrame(draw); };
@@ -429,6 +450,7 @@ const fmtPct = v => v.toLocaleString('fr-FR', { minimumFractionDigits: v >= 10 ?
 const esc = s => String(s || '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
 function refreshUI(){
+  drawBorders();
   const c = me ? cityAt(me.lat, me.lon) : null;
   if (c){
     $('cLabel').textContent = c.sub || 'Ville actuelle'; $('cName').textContent = c.name; $('cPct').textContent = fmtPct(pct(c));
@@ -497,6 +519,7 @@ function renderSettings(){
   let h = '<div class="sec">Carte</div>';
   h += setRow('Style de carte', STYLES[S.style].desc, STYLES[S.style].name, 'style');
   h += setRow('Intensité du brouillard', 'Laisse plus ou moins deviner la carte dessous', fogN[S.fog] || S.fog + ' %', 'fog');
+  h += setRow('Limites des villes', 'Contour des communes découvertes, la tienne en bleu', S.borders ? 'Oui' : 'Non', 'borders');
   h += '<div class="sec">Exploration</div>';
   h += setRow('Rayon de découverte', 'Appliqué aux prochains trajets', S.radius + ' m', 'radius');
   h += setRow('Précision GPS acceptée', 'Les positions moins précises sont ignorées', '±' + S.maxAcc + ' m', 'acc');
@@ -513,8 +536,7 @@ $('shBody').addEventListener('click', e => {
   const item = e.target.closest('.item');
   if (item){
     const c = cities.get(item.dataset.id); if (!c) return;
-    follow = false; if (outline) outline.remove();
-    outline = L.geoJSON(c.geo, { style: { color: '#7cc4ff', weight: 3, fill: false, dashArray: '8 6' }, interactive: false }).addTo(map);
+    follow = false; focusId = c.id; drawBorders(true);
     map.fitBounds([[c.bbox[1], c.bbox[0]], [c.bbox[3], c.bbox[2]]], { padding: [40, 40] });
     closeSheet(); banner(`${c.name} · ${fmtPct(pct(c))}`); return;
   }
@@ -522,6 +544,7 @@ $('shBody').addEventListener('click', e => {
   switch (b.dataset.act){
     case 'style': chooseStyle(); return;
     case 'fog': S.fog = cycle([55, 70, 85], S.fog); redraw(); break;
+    case 'borders': S.borders = !S.borders; saveSettings(); drawBorders(true); break;
     case 'radius': S.radius = cycle([15, 20, 25, 30, 40, 50], S.radius); break;
     case 'acc': S.maxAcc = cycle([20, 30, 40, 50, 60, 100], S.maxAcc); break;
     case 'wake': S.wake = !S.wake; S.wake && tracking ? wakeOn() : wakeOff(); break;
@@ -553,7 +576,7 @@ $('dlg').addEventListener('click', e => { if (e.target.id === 'dlg'){ $('dlg').c
 
 $('bTrack').onclick = () => tracking ? stopTrack() : startTrack();
 $('bCenter').onclick = () => {
-  follow = true; if (outline){ outline.remove(); outline = null; }
+  follow = true; if (focusId){ focusId = null; drawBorders(true); }
   if (me) zoomAround(me.lat, me.lon); else if (!tracking) startTrack();
 };
 $('bStyle').onclick = chooseStyle;

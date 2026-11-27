@@ -6,6 +6,8 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Shader
 import android.graphics.Color
+import android.graphics.DashPathEffect
+import android.graphics.Path
 import android.graphics.Paint
 import android.graphics.Point
 import android.graphics.PorterDuff
@@ -47,6 +49,66 @@ class FogOverlay : Overlay() {
     private val p0 = Point()
     private val p1 = Point()
     private val rowDl = DoubleArray(Fog.CH)
+
+    // Limites des communes
+    private val bPath = Path()
+    private var dens = 0f
+    private val bShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x73000000; strokeJoin = Paint.Join.ROUND }
+    private val bOther = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xD9FFFFFF.toInt(); strokeJoin = Paint.Join.ROUND }
+    private val bFocus = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFF7CC4FF.toInt(); strokeJoin = Paint.Join.ROUND }
+    private val bGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x407CC4FF; strokeJoin = Paint.Join.ROUND }
+
+    private fun setupPaints(d: Float) {
+        if (d == dens) return
+        dens = d
+        bShadow.strokeWidth = 4f * d
+        bOther.strokeWidth = 1.6f * d
+        bOther.pathEffect = DashPathEffect(floatArrayOf(7f * d, 5f * d), 0f)
+        bFocus.strokeWidth = 3f * d
+        bGlow.strokeWidth = 9f * d
+    }
+
+    /** Construit le tracé des limites d'une commune en coordonnées écran (points trop proches sautés). */
+    private fun buildBorder(c: City, pj: org.osmdroid.views.Projection): Boolean {
+        bPath.reset()
+        var any = false
+        for (poly in c.polys) for (r in poly) {
+            var lx = Int.MIN_VALUE; var ly = Int.MIN_VALUE
+            var q = 0
+            var first = true
+            while (q + 1 < r.size) {
+                gp.setCoords(r[q + 1], r[q]); pj.toPixels(gp, p0)
+                if (first) { bPath.moveTo(p0.x.toFloat(), p0.y.toFloat()); first = false; lx = p0.x; ly = p0.y }
+                else if (abs(p0.x - lx) + abs(p0.y - ly) >= 2) { bPath.lineTo(p0.x.toFloat(), p0.y.toFloat()); lx = p0.x; ly = p0.y }
+                q += 2
+            }
+            if (!first) { bPath.close(); any = true }
+        }
+        return any
+    }
+
+    private fun drawBorders(c: Canvas, mv: MapView, pj: org.osmdroid.views.Projection) {
+        setupPaints(mv.context.resources.displayMetrics.density)
+        val bb = mv.boundingBox
+        val m = Fog.me
+        val list = synchronized(Fog.lock) { Fog.cities.values.toList() }
+        val fid = Fog.focusId
+        val focus = list.firstOrNull { it.id == fid } ?: if (m != null) list.firstOrNull { it.contains(m[0], m[1]) } else null
+        for (city in list) {
+            val b = city.bbox
+            if (b[2] < bb.lonWest || b[0] > bb.lonEast || b[3] < bb.latSouth || b[1] > bb.latNorth) continue
+            // Trop petite à l'écran : inutile de la dessiner
+            gp.setCoords(b[1], b[0]); pj.toPixels(gp, p0); val x0 = p0.x; val y0 = p0.y
+            gp.setCoords(b[3], b[2]); pj.toPixels(gp, p1)
+            if (abs(p1.x - x0) + abs(p1.y - y0) < 10) continue
+            if (city === focus) continue
+            if (buildBorder(city, pj)) { c.drawPath(bPath, bShadow); c.drawPath(bPath, bOther) }
+        }
+        // La commune actuelle par-dessus, en bleu
+        if (focus != null && buildBorder(focus, pj)) {
+            c.drawPath(bPath, bGlow); c.drawPath(bPath, bShadow); c.drawPath(bPath, bFocus)
+        }
+    }
 
     override fun draw(c: Canvas, mv: MapView, shadow: Boolean) {
         if (shadow) return
@@ -103,6 +165,7 @@ class FogOverlay : Overlay() {
             }
         }
         c.restoreToCount(layer)
+        if (Fog.showBorders) drawBorders(c, mv, pj)
     }
 
     companion object {

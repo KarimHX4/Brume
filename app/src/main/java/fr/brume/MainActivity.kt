@@ -483,16 +483,7 @@ class MainActivity : Activity() {
     private fun showCity(c: City) {
         follow = false
         clearOutline()
-        for (poly in c.polys) {
-            val r = poly[0]
-            val pl = Polyline()
-            pl.setPoints((0 until r.size / 2).map { GeoPoint(r[2 * it + 1], r[2 * it]) })
-            pl.outlinePaint.color = accent
-            pl.outlinePaint.strokeWidth = dp(3).toFloat()
-            pl.outlinePaint.pathEffect = DashPathEffect(floatArrayOf(24f, 14f), 0f)
-            map.overlays.add(pl)
-            outlines.add(pl)
-        }
+        Fog.focusId = c.id
         map.zoomToBoundingBox(BoundingBox(c.bbox[3], c.bbox[2], c.bbox[1], c.bbox[0]), true, dp(48))
         hidePanel()
         showBanner("${c.name} · ${Fog.fmtPct(c.pct())}")
@@ -501,6 +492,7 @@ class MainActivity : Activity() {
     private fun clearOutline() {
         for (pl in outlines) map.overlays.remove(pl)
         outlines.clear()
+        Fog.focusId = null
         map.invalidate()
     }
 
@@ -528,6 +520,10 @@ class MainActivity : Activity() {
         settingRow("Intensité du brouillard", "Laisse plus ou moins deviner la carte dessous", fogNames[Fog.fogAlpha] ?: "${Fog.fogAlpha} %") {
             val opts = listOf(55, 70, 85)
             Fog.fogAlpha = opts[(opts.indexOf(Fog.fogAlpha) + 1) % opts.size]
+            Fog.savePrefs(this); map.invalidate(); rebuildPanel()
+        }
+        settingRow("Limites des villes", "Contour des communes découvertes, la tienne en bleu", if (Fog.showBorders) "Oui" else "Non") {
+            Fog.showBorders = !Fog.showBorders
             Fog.savePrefs(this); map.invalidate(); rebuildPanel()
         }
         section("Exploration")

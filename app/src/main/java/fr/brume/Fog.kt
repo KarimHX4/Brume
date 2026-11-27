@@ -57,6 +57,10 @@ object Fog {
     @Volatile var maxAcc = 50f
     /** Opacité du brouillard en % (on doit encore deviner les routes dessous). */
     @Volatile var fogAlpha = 70
+    /** Afficher les limites des communes découvertes. */
+    @Volatile var showBorders = true
+    /** Commune mise en avant après l'avoir touchée dans « Mes villes » (sinon : celle où l'on est). */
+    @Volatile var focusId: String? = null
     /** Dernière position connue : lat, lon, précision (m), vitesse (m/s ou -1). */
     @Volatile var me: DoubleArray? = null
 
@@ -71,6 +75,7 @@ object Fog {
             radius = p.getInt("radius", 20).toDouble()
             maxAcc = p.getInt("maxAcc", 50).toFloat()
             fogAlpha = p.getInt("fogAlpha", 70)
+            showBorders = p.getBoolean("borders", true)
             val s = Store(ctx.applicationContext)
             store = s
             try { s.load(chunks, cities) } catch (e: Exception) { e.printStackTrace() }
@@ -83,7 +88,7 @@ object Fog {
 
     fun savePrefs(ctx: Context) {
         ctx.getSharedPreferences("brume", Context.MODE_PRIVATE).edit()
-            .putInt("radius", radius.toInt()).putInt("maxAcc", maxAcc.toInt()).putInt("fogAlpha", fogAlpha).apply()
+            .putInt("radius", radius.toInt()).putInt("maxAcc", maxAcc.toInt()).putInt("fogAlpha", fogAlpha).putBoolean("borders", showBorders).apply()
     }
 
     fun addListener(l: () -> Unit) { listeners.add(l) }
