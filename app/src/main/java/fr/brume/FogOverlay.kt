@@ -56,6 +56,7 @@ class FogOverlay : Overlay() {
     private val bShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x73000000; strokeJoin = Paint.Join.ROUND }
     private val bOther = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xD9FFFFFF.toInt(); strokeJoin = Paint.Join.ROUND }
     private val bFocus = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFF7CC4FF.toInt(); strokeJoin = Paint.Join.ROUND }
+    private val bDistrict = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x8CFFFFFF.toInt(); strokeJoin = Paint.Join.ROUND }
     private val bGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x407CC4FF; strokeJoin = Paint.Join.ROUND }
 
     private fun setupPaints(d: Float) {
@@ -66,6 +67,8 @@ class FogOverlay : Overlay() {
         bOther.pathEffect = DashPathEffect(floatArrayOf(7f * d, 5f * d), 0f)
         bFocus.strokeWidth = 3f * d
         bGlow.strokeWidth = 9f * d
+        bDistrict.strokeWidth = 1f * d
+        bDistrict.pathEffect = DashPathEffect(floatArrayOf(2f * d, 4f * d), 0f)
     }
 
     /** Construit le tracé des limites d'une commune en coordonnées écran (points trop proches sautés). */
@@ -92,8 +95,20 @@ class FogOverlay : Overlay() {
         val bb = mv.boundingBox
         val m = Fog.me
         val list = synchronized(Fog.lock) { Fog.cities.values.toList() }
+        val dlist = synchronized(Fog.lock) { Fog.districts.values.flatten() }
         val fid = Fog.focusId
-        val focus = list.firstOrNull { it.id == fid } ?: if (m != null) list.firstOrNull { it.contains(m[0], m[1]) } else null
+        val focus = (if (fid != null) list.firstOrNull { it.id == fid } ?: dlist.firstOrNull { it.id == fid } else null)
+            ?: if (m != null) list.firstOrNull { it.contains(m[0], m[1]) } else null
+        // Arrondissements / quartiers : pointillés fins
+        for (d in dlist) {
+            val b = d.bbox
+            if (b[2] < bb.lonWest || b[0] > bb.lonEast || b[3] < bb.latSouth || b[1] > bb.latNorth) continue
+            gp.setCoords(b[1], b[0]); pj.toPixels(gp, p0); val x0 = p0.x; val y0 = p0.y
+            gp.setCoords(b[3], b[2]); pj.toPixels(gp, p1)
+            if (abs(p1.x - x0) + abs(p1.y - y0) < 40) continue
+            if (d === focus) continue
+            if (buildBorder(d, pj)) c.drawPath(bPath, bDistrict)
+        }
         for (city in list) {
             val b = city.bbox
             if (b[2] < bb.lonWest || b[0] > bb.lonEast || b[3] < bb.latSouth || b[1] > bb.latNorth) continue

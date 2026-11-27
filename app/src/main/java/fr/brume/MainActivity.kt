@@ -61,6 +61,7 @@ class MainActivity : Activity() {
     private var follow = true
     private var centeredOnce = false
     private var panelMode = ""
+    private val expanded = HashSet<String>()
     private val outlines = ArrayList<Polyline>()
 
     private val fg = 0xFFEEF1F7.toInt()
@@ -299,7 +300,10 @@ class MainActivity : Activity() {
         // Carte du haut
         val c = if (m != null) Fog.cityAt(m[0], m[1]) else null
         if (c != null) {
-            cityLabel.text = if (c.sub.isNotEmpty()) c.sub else "Ville actuelle"
+            val dl = synchronized(Fog.lock) { Fog.districts[c.id] }
+            if (dl == null) Districts.autoLoad(c)
+            val d = if (dl != null && m != null) Fog.districtAt(c.id, m[0], m[1]) else null
+            cityLabel.text = if (d != null) "${d.name} · ${Fog.fmtPct(d.pct())}" else if (c.sub.isNotEmpty()) c.sub else "Ville actuelle"
             cityName.text = c.name
             cityPct.text = Fog.fmtPct(c.pct())
             cityProg.visibility = View.VISIBLE
@@ -410,8 +414,11 @@ class MainActivity : Activity() {
     }
 
     private fun rebuildPanel() {
+        val sv = findViewById<ScrollView>(R.id.panelScroll)
+        val y = sv.scrollY
         panelBody.removeAllViews()
         if (panelMode == "cities") buildCities() else buildSettings()
+        sv.post { sv.scrollTo(0, y) }
     }
 
     private fun buildCities() {
@@ -462,12 +469,63 @@ class MainActivity : Activity() {
                 progress = (c.pct() * 10).roundToInt().coerceAtLeast(4)
                 progressDrawable = getDrawable(R.drawable.progress)
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(5)).apply { topMargin = dp(8) })
+            // Menu déroulant : arrondissements / quartiers
+            val ds = synchronized(Fog.lock) { Fog.districts[c.id] }
+            val open = c.id in expanded
+            if (ds == null || ds.isNotEmpty()) {
+                val lbl = Districts.label(ds) + (if (ds != null) " (${ds.size})" else "")
+                col.addView(text((if (open) "▴ " else "▾ ") + lbl, 13f, accent, true).apply {
+                    setPadding(0, dp(10), 0, 0)
+                    isClickable = true
+                    setOnClickListener {
+                        if (open) expanded.remove(c.id) else {
+                            expanded.add(c.id)
+                            Districts.load(c) { ok -> runOnUiThread {
+                                if (!ok) toast("Découpage indisponible pour l'instant, réessaie plus tard")
+                                if (panel.visibility == View.VISIBLE && panelMode == "cities") rebuildPanel()
+                            } }
+                        }
+                        rebuildPanel()
+                    }
+                })
+            }
             row.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
             panelBody.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
+
+            if (open) {
+                val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(30), 0, 0, dp(4)) }
+                when {
+                    ds == null -> box.addView(text(if (Districts.isLoading(c.id)) "Chargement du découpage…" else "Touche pour réessayer", 13f, muted).apply { setPadding(dp(8), dp(4), 0, dp(10)) })
+                    else -> for (d in ds) box.addView(districtRow(d), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) })
+                }
+                panelBody.addView(box)
+            }
         }
         panelBody.addView(text("Touche une ville pour voir ses limites. Le % compare la surface dévoilée à la surface officielle de la commune (OpenStreetMap).", 12f, muted)
             .apply { setPadding(dp(4), dp(8), dp(4), 0) })
+    }
+
+    private fun districtRow(d: City): View {
+        val v = d.pct()
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(0xFF1C2333.toInt(), 12f)
+            setPadding(dp(12), dp(9), dp(12), dp(10))
+            isClickable = true
+            setOnClickListener { press(this); showCity(d) }
+        }
+        val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        line.addView(text(d.name, 14f, if (d.n > 0) fg else muted, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        line.addView(text(if (d.n > 0) Fog.fmtPct(v) else "—", 14f, if (d.n > 0) accent else muted, true))
+        row.addView(line)
+        row.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progress = if (d.n > 0) (v * 10).roundToInt().coerceAtLeast(4) else 0
+            progressDrawable = getDrawable(R.drawable.progress)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)).apply { topMargin = dp(6) })
+        return row
     }
 
     private fun statTile(value: String, label: String) = LinearLayout(this).apply {

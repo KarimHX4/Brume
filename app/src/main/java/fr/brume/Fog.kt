@@ -28,7 +28,9 @@ class Pt(val lat: Double, val lon: Double, val t: Long)
 private class Batch(
     val chunks: List<Pair<Long, ByteArray>>,
     val newCities: List<City>,
-    val counts: List<Pair<String, Long>>
+    val counts: List<Pair<String, Long>>,
+    val newDistricts: List<Pair<String, List<City>>>,
+    val dCounts: List<Pair<String, Long>>
 )
 
 /**
@@ -45,6 +47,10 @@ object Fog {
     val lock = Any()
     val chunks = HashMap<Long, ByteArray>()
     val cities = LinkedHashMap<String, City>()
+    /** Arrondissements / quartiers par commune (liste vide = commune sans découpage). */
+    val districts = HashMap<String, List<City>>()
+    private val newDistricts = HashSet<String>()   // id de commune dont la liste est à enregistrer
+    private val dirtyD = HashSet<String>()         // id de quartier dont le compte a changé
     private val dirty = HashSet<Long>()
     private val dirtyN = HashSet<String>()
     private val newCities = HashSet<String>()
@@ -78,7 +84,7 @@ object Fog {
             showBorders = p.getBoolean("borders", true)
             val s = Store(ctx.applicationContext)
             store = s
-            try { s.load(chunks, cities) } catch (e: Exception) { e.printStackTrace() }
+            try { s.load(chunks, cities, districts) } catch (e: Exception) { e.printStackTrace() }
             var n = 0L
             for (b in chunks.values) n += bitCount(b)
             totalCells = n
@@ -216,7 +222,33 @@ object Fog {
             var n = 0
             for (q in 0 until m) if (c.contains(la[q], lo[q])) n++
             if (n > 0) { c.n += n; dirtyN.add(c.id) }
+            if (n == 0) continue
+            val ds = districts[c.id] ?: continue
+            for (d in ds) {
+                val db = d.bbox
+                if (o1 < db[0] || o0 > db[2] || a1 < db[1] || a0 > db[3]) continue
+                var nd = 0
+                for (q in 0 until m) if (d.contains(la[q], lo[q])) nd++
+                if (nd > 0) { d.n += nd; dirtyD.add(d.id) }
+            }
         }
+    }
+
+    fun districtAt(cityId: String, lat: Double, lon: Double): City? = synchronized(lock) {
+        districts[cityId]?.firstOrNull { it.contains(lat, lon) }
+    }
+
+    fun findArea(id: String): City? = synchronized(lock) {
+        cities[id] ?: districts.values.asSequence().flatten().firstOrNull { it.id == id }
+    }
+
+    fun addDistricts(cityId: String, list: List<City>) {
+        synchronized(lock) {
+            for (d in list) d.n = countIn(d)
+            districts[cityId] = list
+            newDistricts.add(cityId)
+        }
+        notifyChanged()
     }
 
     fun cityAt(lat: Double, lon: Double): City? = synchronized(lock) {
@@ -224,6 +256,12 @@ object Fog {
     }
 
     private fun recount(c: City) {
+        c.n = countIn(c)
+        dirtyN.add(c.id)
+        districts[c.id]?.forEach { d -> d.n = countIn(d); dirtyD.add(d.id) }
+    }
+
+    private fun countIn(c: City): Long {
         val b = c.bbox
         var n = 0L
         for ((k, bits) in chunks) {
@@ -241,8 +279,7 @@ object Fog {
                 if (c.contains(rowLat(i), (cj * CH + lj + 0.5) * dLon(i))) n++
             }
         }
-        c.n = n
-        dirtyN.add(c.id)
+        return n
     }
 
     fun recountAll() { synchronized(lock) { for (c in cities.values) recount(c) } }
@@ -279,18 +316,20 @@ object Fog {
     fun flush() {
         val s = store ?: return
         val batch = synchronized(lock) {
-            if (dirty.isEmpty() && dirtyN.isEmpty() && newCities.isEmpty()) null
+            if (dirty.isEmpty() && dirtyN.isEmpty() && newCities.isEmpty() && newDistricts.isEmpty() && dirtyD.isEmpty()) null
             else {
                 val b = Batch(
                     dirty.mapNotNull { k -> chunks[k]?.let { k to it.copyOf() } },
                     newCities.mapNotNull { cities[it] },
-                    dirtyN.mapNotNull { id -> cities[id]?.let { id to it.n } }
+                    dirtyN.mapNotNull { id -> cities[id]?.let { id to it.n } },
+                    newDistricts.mapNotNull { id -> districts[id]?.let { id to it } },
+                    districts.values.asSequence().flatten().filter { it.id in dirtyD }.map { it.id to it.n }.toList()
                 )
-                dirty.clear(); newCities.clear(); dirtyN.clear()
+                dirty.clear(); newCities.clear(); dirtyN.clear(); newDistricts.clear(); dirtyD.clear()
                 b
             }
         } ?: return
-        try { s.save(batch.chunks, batch.newCities, batch.counts) } catch (e: Exception) { e.printStackTrace() }
+        try { s.save(batch.chunks, batch.newCities, batch.counts, batch.newDistricts, batch.dCounts) } catch (e: Exception) { e.printStackTrace() }
     }
 
     fun flushAsync() { io.execute { flush() } }
@@ -298,6 +337,7 @@ object Fog {
     fun reset() {
         synchronized(lock) {
             chunks.clear(); cities.clear(); dirty.clear(); dirtyN.clear(); newCities.clear()
+            districts.clear(); newDistricts.clear(); dirtyD.clear()
             totalCells = 0; last = null
         }
         Geocoder.clear()
