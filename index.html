@@ -65,6 +65,9 @@
   .item .top span:first-child{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .item .top span:last-child{color:var(--acc)}
   .item small{display:block;color:var(--mut);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item .prog{height:5px}
+  .seg{display:flex;background:var(--row);border-radius:12px;padding:3px;margin-bottom:10px}
+  .seg button{flex:1;padding:7px 0;border-radius:10px;font-size:13px;font-weight:700;color:var(--mut)}
+  .seg button.on{background:var(--acc);color:#0b1220}
   .tog{color:var(--acc);font-weight:700;font-size:12px;padding-top:8px}
   .back{color:var(--acc);font-weight:700;font-size:14px;padding:2px 4px 10px;cursor:pointer}
   .ditem{background:#1c2333;border-radius:12px;padding:9px 12px 10px;margin-bottom:6px;cursor:pointer}
@@ -580,13 +583,16 @@ function renderCity(id){
 }
 function renderCities(){
   $('shTitle').textContent = 'Mes villes';
-  const list = [...cities.values()].sort((a, b) => pct(b) - pct(a));
+  const byPct = [...cities.values()].sort((a, b) => pct(b) - pct(a));
+  const rankOf = new Map(byPct.map((c, i) => [c.id, i]));
+  const list = S.sortAlpha ? [...byPct].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })) : byPct;
   let h = `<div class="tiles"><div class="tile"><b>${fmtArea(totalCells * CELL * CELL)}</b><small>dévoilés</small></div>
     <div class="tile"><b>${list.length}</b><small>${list.length > 1 ? 'villes' : 'ville'}</small></div>
-    <div class="tile"><b>${list.length ? fmtPct(pct(list[0])) : '—'}</b><small>record</small></div></div>`;
+    <div class="tile"><b>${byPct.length ? fmtPct(pct(byPct[0])) : '—'}</b><small>record</small></div></div>`;
+  if (list.length > 1) h += `<div class="seg"><button data-sort="pct" class="${S.sortAlpha ? '' : 'on'}">Par avancement</button><button data-sort="alpha" class="${S.sortAlpha ? 'on' : ''}">A → Z</button></div>`;
   if (!list.length) h += `<div class="empty">Aucune ville pour l'instant.<br>Lance l'exploration et la première commune apparaîtra ici.</div>`;
-  list.forEach((c, i) => {
-    const v = pct(c);
+  list.forEach(c => {
+    const i = rankOf.get(c.id), v = pct(c);
     h += `<div class="item" data-id="${esc(c.id)}"><div class="rank ${i < 3 ? 'r' + (i + 1) : ''}">${i + 1}</div><div class="c">
       <div class="top"><span>${esc(c.name)}</span><span>${fmtPct(v)}</span></div>
       <small>${fmtArea(c.n * CELL * CELL)} sur ${fmtArea(c.area)}${c.sub ? ' · ' + esc(c.sub) : ''}</small>
@@ -631,6 +637,8 @@ function showArea(a){
   closeSheet(); banner(`${a.name} · ${fmtPct(pct(a))}`);
 }
 $('shBody').addEventListener('click', e => {
+  const sb = e.target.closest('[data-sort]');
+  if (sb){ S.sortAlpha = sb.dataset.sort === 'alpha'; saveSettings(); renderSheet(); return; }
   if (e.target.closest('.back')){ sheetMode = 'cities'; renderSheet(); return; }
   const sh = e.target.closest('[data-show]');
   if (sh){ const c = cities.get(sh.dataset.show); if (c) showArea(c); return; }
