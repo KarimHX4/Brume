@@ -485,7 +485,8 @@ function onFix(p){
   me = { lat, lon, acc: accuracy, spd: speed };
   gpsState = accuracy > S.maxAcc ? 'bad' : 'ok';
   showMe();
-  if (!centeredOnce){ centeredOnce = true; zoomAround(lat, lon); }
+  if (!centeredOnce){ centeredOnce = true; recenter = false; zoomAround(lat, lon); }
+  else if (recenter){ recenter = false; if (map.getZoom() < 14) zoomAround(lat, lon); else map.panTo([lat, lon], { animate: false }); }
   else if (follow) map.panTo([lat, lon], { animate: false });
   if (accuracy <= S.maxAcc){
     const pt = { lat, lon, t: p.timestamp || Date.now() }, out = [];
@@ -496,6 +497,16 @@ function onFix(p){
   refreshUI();
 }
 map.on('dragstart', () => { follow = false; });
+// Retour dans l'app : on se recentre sur sa position (zoom gardé sauf si la carte est trop dézoomée)
+let recenter = false;
+function recenterOnMe(){
+  follow = true;
+  if (focusId){ focusId = null; drawBorders(true); }
+  if (!me){ recenter = true; return; }
+  if (map.getZoom() < 14) zoomAround(me.lat, me.lon); else map.panTo([me.lat, me.lon], { animate: false });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) recenterOnMe(); });
+window.addEventListener('pageshow', () => recenterOnMe());
 
 /* ---------- Interface ---------- */
 const fmtArea = m2 => m2 >= 1e6 ? (m2 / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: m2 >= 1e8 ? 0 : 2 }) + ' km²' : Math.round(m2).toLocaleString('fr-FR') + ' m²';

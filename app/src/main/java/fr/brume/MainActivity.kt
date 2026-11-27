@@ -60,6 +60,7 @@ class MainActivity : Activity() {
     private lateinit var meView: MeView
     private var follow = true
     private var centeredOnce = false
+    private var recenter = false
     private var panelMode = ""
     private val outlines = ArrayList<Polyline>()
 
@@ -176,6 +177,11 @@ class MainActivity : Activity() {
         super.onResume()
         map.onResume()
         Fog.addListener(listener)
+        // Retour dans l'app : on se recentre sur sa position
+        follow = true
+        recenter = true
+        if (outlines.isNotEmpty() || Fog.focusId != null) clearOutline()
+        if (!TrackingService.running) seedLastKnown(true)
         refresh()
     }
 
@@ -346,7 +352,13 @@ class MainActivity : Activity() {
 
         if (m != null && !centeredOnce) {
             centeredOnce = true
+            recenter = false
             zoomAround(m[0], m[1], false)
+        } else if (m != null && recenter) {
+            recenter = false
+            // On garde le zoom choisi, sauf si la carte était trop dézoomée pour voir autour de soi
+            if (map.zoomLevelDouble < 14.0) zoomAround(m[0], m[1], false)
+            else map.controller.setCenter(GeoPoint(m[0], m[1]))
         } else if (follow && on && m != null) {
             map.controller.setCenter(GeoPoint(m[0], m[1]))
         }
@@ -363,8 +375,8 @@ class MainActivity : Activity() {
 
     /** Dernière position connue du téléphone, pour centrer la carte dès l'ouverture. */
     @Suppress("MissingPermission")
-    private fun seedLastKnown() {
-        if (Fog.me != null || !hasLoc()) return
+    private fun seedLastKnown(refreshIfIdle: Boolean = false) {
+        if ((Fog.me != null && !refreshIfIdle) || !hasLoc()) return
         val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
         val best = listOf(android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER)
             .mapNotNull { try { lm.getLastKnownLocation(it) } catch (e: Exception) { null } }
