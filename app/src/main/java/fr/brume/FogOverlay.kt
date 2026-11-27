@@ -96,17 +96,7 @@ class FogOverlay : Overlay() {
         val fid = Fog.focusId
         val focus = (if (fid != null) list.firstOrNull { it.id == fid } ?: dlist.firstOrNull { it.id == fid } else null)
             ?: if (m != null) list.firstOrNull { it.contains(m[0], m[1]) } else null
-        for (city in list) {
-            val b = city.bbox
-            if (b[2] < bb.lonWest || b[0] > bb.lonEast || b[3] < bb.latSouth || b[1] > bb.latNorth) continue
-            // Trop petite à l'écran : inutile de la dessiner
-            gp.setCoords(b[1], b[0]); pj.toPixels(gp, p0); val x0 = p0.x; val y0 = p0.y
-            gp.setCoords(b[3], b[2]); pj.toPixels(gp, p1)
-            if (abs(p1.x - x0) + abs(p1.y - y0) < 10) continue
-            if (city === focus) continue
-            if (buildBorder(city, pj)) { c.drawPath(bPath, bShadow); c.drawPath(bPath, bOther) }
-        }
-        // La commune actuelle par-dessus, en bleu
+        // Seule la commune où l'on est (ou celle choisie dans « Mes villes ») est entourée, en bleu
         if (focus != null && buildBorder(focus, pj)) {
             c.drawPath(bPath, bGlow); c.drawPath(bPath, bShadow); c.drawPath(bPath, bFocus)
         }

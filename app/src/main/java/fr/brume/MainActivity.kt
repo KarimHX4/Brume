@@ -617,7 +617,7 @@ class MainActivity : Activity() {
         val st = MapStyles.all[getSharedPreferences("brume", MODE_PRIVATE).getInt("style", 0).coerceIn(0, MapStyles.all.size - 1)]
         settingRow("Style de carte", st.desc, st.name) { chooseStyle() }
         fogSliderRow()
-        settingRow("Limites des villes", "Contour des communes découvertes, la tienne en bleu", if (Fog.showBorders) "Oui" else "Non") {
+        settingRow("Limite de la ville", "Contour de la ville où tu es ou que tu as choisie", if (Fog.showBorders) "Oui" else "Non") {
             Fog.showBorders = !Fog.showBorders
             Fog.savePrefs(this); map.invalidate(); rebuildPanel()
         }
