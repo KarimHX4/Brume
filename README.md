@@ -1,4 +1,13 @@
-# Brume pour Android
+# Brume
+
+**Version web (iPhone, ordinateur) :** https://karimhx4.github.io/Brume/
+Sur iPhone : ouvre le lien dans Safari → Partager → « Sur l'écran d'accueil ».
+
+**App Android :** https://github.com/KarimHX4/Brume/releases/download/latest/brume.apk
+
+---
+
+## Brume pour Android
 
 Une carte du monde dans le brouillard, qui se dévoile partout où tu passes, même écran verrouillé.
 
