@@ -78,6 +78,8 @@ object Fog {
         synchronized(lock) {
             if (store != null) return
             val p = ctx.getSharedPreferences("brume", Context.MODE_PRIVATE)
+            prefsCtx = ctx.applicationContext
+            noDistricts.addAll(p.getStringSet("noDistricts", emptySet()) ?: emptySet())
             radius = p.getInt("radius", 20).toDouble()
             maxAcc = p.getInt("maxAcc", 50).toFloat()
             fogAlpha = p.getInt("fogAlpha", 70)
@@ -242,14 +244,37 @@ object Fog {
         cities[id] ?: districts.values.asSequence().flatten().firstOrNull { it.id == id }
     }
 
-    fun addDistricts(cityId: String, list: List<City>) {
+    /** Communes vérifiées sans arrondissements (Nominatim renvoie la commune elle-même). */
+    private val noDistricts = HashSet<String>()
+    private var prefsCtx: Context? = null
+
+    fun hasNoDistricts(cityId: String) = synchronized(lock) { cityId in noDistricts }
+
+    fun setNoDistricts(cityId: String) {
+        val set = synchronized(lock) { noDistricts.add(cityId); HashSet(noDistricts) }
+        prefsCtx?.getSharedPreferences("brume", Context.MODE_PRIVATE)?.edit()?.putStringSet("noDistricts", set)?.apply()
+    }
+
+    /** Ajoute un arrondissement visité à sa commune (tri naturel : 2e avant 10e). */
+    fun addDistrict(cityId: String, d: City): Boolean {
         synchronized(lock) {
-            for (d in list) d.n = countIn(d)
-            districts[cityId] = list
+            val cur = districts[cityId] ?: emptyList()
+            if (cur.any { it.id == d.id }) return false
+            d.n = countIn(d)
+            districts[cityId] = (cur + d).sortedWith(naturalOrder)
             newDistricts.add(cityId)
         }
-        notifyChanged()
+        return true
     }
+
+    val naturalOrder = Comparator<City> { a, b ->
+        val na = Regex("\\d+").find(a.name)?.value?.toIntOrNull()
+        val nb = Regex("\\d+").find(b.name)?.value?.toIntOrNull()
+        if (na != null && nb != null && na != nb) na.compareTo(nb) else a.name.compareTo(b.name, ignoreCase = true)
+    }
+
+    /** Arrondissements où l'on est passé, pour une commune. */
+    fun visitedDistricts(cityId: String): List<City> = synchronized(lock) { districts[cityId]?.filter { it.n > 0 } ?: emptyList() }
 
     fun cityAt(lat: Double, lon: Double): City? = synchronized(lock) {
         cities.values.firstOrNull { it.contains(lat, lon) }
@@ -337,9 +362,10 @@ object Fog {
     fun reset() {
         synchronized(lock) {
             chunks.clear(); cities.clear(); dirty.clear(); dirtyN.clear(); newCities.clear()
-            districts.clear(); newDistricts.clear(); dirtyD.clear()
+            districts.clear(); newDistricts.clear(); dirtyD.clear(); noDistricts.clear()
             totalCells = 0; last = null
         }
+        prefsCtx?.getSharedPreferences("brume", Context.MODE_PRIVATE)?.edit()?.remove("noDistricts")?.apply()
         Geocoder.clear()
         io.execute { try { store?.clearAll() } catch (e: Exception) { e.printStackTrace() } }
         notifyChanged()

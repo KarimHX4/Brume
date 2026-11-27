@@ -61,7 +61,6 @@ class MainActivity : Activity() {
     private var follow = true
     private var centeredOnce = false
     private var panelMode = ""
-    private val expanded = HashSet<String>()
     private val outlines = ArrayList<Polyline>()
 
     private val fg = 0xFFEEF1F7.toInt()
@@ -164,6 +163,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.topCard).setOnClickListener { showPanel("cities") }
 
         Geocoder.onNewCity = { c -> runOnUiThread { showBanner("Nouvelle ville · ${c.name}") } }
+        Geocoder.onNewDistrict = { _, d -> runOnUiThread { showBanner("Nouvel arrondissement · ${d.name}") } }
 
         // Reprend l'exploration si elle tournait quand l'app a été fermée par le système
         if (prefs.getBoolean("tracking", false) && !TrackingService.running) {
@@ -300,10 +300,7 @@ class MainActivity : Activity() {
         // Carte du haut
         val c = if (m != null) Fog.cityAt(m[0], m[1]) else null
         if (c != null) {
-            val dl = synchronized(Fog.lock) { Fog.districts[c.id] }
-            if (dl == null) Districts.autoLoad(c)
-            val d = if (dl != null && m != null) Fog.districtAt(c.id, m[0], m[1]) else null
-            cityLabel.text = if (d != null) "${d.name} · ${Fog.fmtPct(d.pct())}" else if (c.sub.isNotEmpty()) c.sub else "Ville actuelle"
+            cityLabel.text = if (c.sub.isNotEmpty()) c.sub else "Ville actuelle"
             cityName.text = c.name
             cityPct.text = Fog.fmtPct(c.pct())
             cityProg.visibility = View.VISIBLE
@@ -417,7 +414,11 @@ class MainActivity : Activity() {
         val sv = findViewById<ScrollView>(R.id.panelScroll)
         val y = sv.scrollY
         panelBody.removeAllViews()
-        if (panelMode == "cities") buildCities() else buildSettings()
+        when {
+            panelMode == "cities" -> buildCities()
+            panelMode.startsWith("city:") -> buildCityDetail(panelMode.substring(5))
+            else -> buildSettings()
+        }
         sv.post { sv.scrollTo(0, y) }
     }
 
@@ -445,7 +446,10 @@ class MainActivity : Activity() {
                 background = rounded(rowColor, 14f)
                 setPadding(dp(12), dp(12), dp(14), dp(12))
                 isClickable = true
-                setOnClickListener { press(this); showCity(c) }
+                setOnClickListener {
+                    press(this)
+                    if (Fog.visitedDistricts(c.id).isNotEmpty()) { panelMode = "city:" + c.id; rebuildPanel() } else showCity(c)
+                }
             }
             // Rang
             row.addView(text("${idx + 1}", 13f, if (idx < 3) 0xFF0B1220.toInt() else fg, true).apply {
@@ -469,40 +473,38 @@ class MainActivity : Activity() {
                 progress = (c.pct() * 10).roundToInt().coerceAtLeast(4)
                 progressDrawable = getDrawable(R.drawable.progress)
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(5)).apply { topMargin = dp(8) })
-            // Menu déroulant : arrondissements / quartiers
-            val ds = synchronized(Fog.lock) { Fog.districts[c.id] }
-            val open = c.id in expanded
-            if (ds == null || ds.isNotEmpty()) {
-                val lbl = Districts.label(ds) + (if (ds != null) " (${ds.size})" else "")
-                col.addView(text((if (open) "▴ " else "▾ ") + lbl, 13f, accent, true).apply {
-                    setPadding(0, dp(10), 0, 0)
-                    isClickable = true
-                    setOnClickListener {
-                        if (open) expanded.remove(c.id) else {
-                            expanded.add(c.id)
-                            Districts.load(c) { ok -> runOnUiThread {
-                                if (!ok) toast("Découpage indisponible pour l'instant, réessaie plus tard")
-                                if (panel.visibility == View.VISIBLE && panelMode == "cities") rebuildPanel()
-                            } }
-                        }
-                        rebuildPanel()
-                    }
-                })
-            }
+            // Arrondissements visités : la ville s'ouvre sur leur détail
+            val nd = Fog.visitedDistricts(c.id).size
+            if (nd > 0) col.addView(text("$nd arrondissement${if (nd > 1) "s" else ""} visité${if (nd > 1) "s" else ""}  ›", 12f, accent, true).apply { setPadding(0, dp(8), 0, 0) })
             row.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
             panelBody.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
 
-            if (open) {
-                val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(30), 0, 0, dp(4)) }
-                when {
-                    ds == null -> box.addView(text(if (Districts.isLoading(c.id)) "Chargement du découpage…" else "Touche pour réessayer", 13f, muted).apply { setPadding(dp(8), dp(4), 0, dp(10)) })
-                    else -> for (d in ds) box.addView(districtRow(d), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) })
-                }
-                panelBody.addView(box)
-            }
         }
         panelBody.addView(text("Touche une ville pour voir ses limites. Le % compare la surface dévoilée à la surface officielle de la commune (OpenStreetMap).", 12f, muted)
+            .apply { setPadding(dp(4), dp(8), dp(4), 0) })
+    }
+
+    /** Détail d'une ville : avancement global + arrondissements visités. */
+    private fun buildCityDetail(id: String) {
+        val c = synchronized(Fog.lock) { Fog.cities[id] }
+        if (c == null) { panelMode = "cities"; buildCities(); return }
+        panelTitle.text = c.name
+        panelBody.addView(text("‹  Mes villes", 14f, accent, true).apply {
+            setPadding(dp(4), dp(2), 0, dp(10))
+            isClickable = true
+            setOnClickListener { panelMode = "cities"; rebuildPanel() }
+        })
+        val ds = Fog.visitedDistricts(id)
+        val tiles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tiles.addView(statTile(Fog.fmtPct(c.pct()), "de la ville"), weighted())
+        tiles.addView(statTile(Fog.fmtArea(c.n * Fog.CELL * Fog.CELL), "dévoilés"), weighted().apply { marginStart = dp(8) })
+        tiles.addView(statTile("${ds.size}", if (ds.size > 1) "arrondissements" else "arrondissement"), weighted().apply { marginStart = dp(8) })
+        panelBody.addView(tiles, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+        settingRow("Voir sur la carte", "Cadrer la ville et afficher ses limites", null) { showCity(c) }
+        section("Arrondissements visités")
+        for (d in ds) panelBody.addView(districtRow(d), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) })
+        panelBody.addView(text("Un arrondissement apparaît ici dès que tu y passes. Touche-le pour le voir sur la carte.", 12f, muted)
             .apply { setPadding(dp(4), dp(8), dp(4), 0) })
     }
 
