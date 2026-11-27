@@ -436,14 +436,41 @@ class MainActivity : Activity() {
 
     private fun buildCities() {
         panelTitle.text = "Mes villes"
-        val list = synchronized(Fog.lock) { Fog.cities.values.toList() }.sortedByDescending { it.pct() }
+        val byPct = synchronized(Fog.lock) { Fog.cities.values.toList() }.sortedByDescending { it.pct() }
+        val rankOf = HashMap<String, Int>().apply { byPct.forEachIndexed { i, c -> put(c.id, i) } }
+        val prefs = getSharedPreferences("brume", MODE_PRIVATE)
+        val alpha = prefs.getBoolean("sortAlpha", false)
+        val collator = java.text.Collator.getInstance(java.util.Locale.FRENCH).apply { strength = java.text.Collator.PRIMARY }
+        val list = if (alpha) byPct.sortedWith { a, b -> collator.compare(a.name, b.name) } else byPct
 
         // Tuiles de résumé
         val tiles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tiles.addView(statTile(Fog.fmtArea(Fog.exploredArea()), "dévoilés"), weighted())
         tiles.addView(statTile("${list.size}", if (list.size > 1) "villes" else "ville"), weighted().apply { marginStart = dp(8) })
-        tiles.addView(statTile(list.firstOrNull()?.let { Fog.fmtPct(it.pct()) } ?: "—", "record"), weighted().apply { marginStart = dp(8) })
-        panelBody.addView(tiles, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) })
+        tiles.addView(statTile(byPct.firstOrNull()?.let { Fog.fmtPct(it.pct()) } ?: "—", "record"), weighted().apply { marginStart = dp(8) })
+        panelBody.addView(tiles, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+
+        // Choix du tri : par avancement ou par ordre alphabétique
+        if (list.size > 1) {
+            val seg = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = rounded(rowColor, 12f)
+                setPadding(dp(3), dp(3), dp(3), dp(3))
+            }
+            for ((label, isAlpha) in listOf("Par avancement" to false, "A → Z" to true)) {
+                val on = isAlpha == alpha
+                seg.addView(text(label, 13f, if (on) 0xFF0B1220.toInt() else muted, true).apply {
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(7), 0, dp(7))
+                    if (on) background = rounded(accent, 10f)
+                    isClickable = true
+                    setOnClickListener {
+                        if (!on) { prefs.edit().putBoolean("sortAlpha", isAlpha).apply(); rebuildPanel() }
+                    }
+                }, weighted())
+            }
+            panelBody.addView(seg, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+        }
 
         if (list.isEmpty()) {
             panelBody.addView(text("Aucune ville pour l'instant.\nLance l'exploration et la première commune apparaîtra ici.", 14f, muted).apply {
@@ -451,7 +478,8 @@ class MainActivity : Activity() {
             })
             return
         }
-        list.forEachIndexed { idx, c ->
+        list.forEach { c ->
+            val idx = rankOf[c.id] ?: 0   // le rang reste celui de l'avancement, même en tri alphabétique
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
