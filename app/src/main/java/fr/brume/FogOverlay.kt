@@ -130,7 +130,7 @@ class FogOverlay : Overlay() {
         val pj = mv.projection
         val bb = mv.boundingBox
         val layer = c.saveLayer(null, null)
-        val a = (Fog.fogAlpha.coerceIn(30, 95) * 255 / 100)
+        val a = (Fog.fogAlpha.coerceIn(20, 100) * 255 / 100)
         c.drawColor((a shl 24) or 0x101626)
         // Texture accrochée à un point de la carte proche de l'écran
         var an = anchor

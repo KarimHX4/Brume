@@ -574,12 +574,7 @@ class MainActivity : Activity() {
         section("Carte")
         val st = MapStyles.all[getSharedPreferences("brume", MODE_PRIVATE).getInt("style", 0).coerceIn(0, MapStyles.all.size - 1)]
         settingRow("Style de carte", st.desc, st.name) { chooseStyle() }
-        val fogNames = mapOf(55 to "Légère", 70 to "Moyenne", 85 to "Dense")
-        settingRow("Intensité du brouillard", "Laisse plus ou moins deviner la carte dessous", fogNames[Fog.fogAlpha] ?: "${Fog.fogAlpha} %") {
-            val opts = listOf(55, 70, 85)
-            Fog.fogAlpha = opts[(opts.indexOf(Fog.fogAlpha) + 1) % opts.size]
-            Fog.savePrefs(this); map.invalidate(); rebuildPanel()
-        }
+        fogSliderRow()
         settingRow("Limites des villes", "Contour des communes découvertes, la tienne en bleu", if (Fog.showBorders) "Oui" else "Non") {
             Fog.showBorders = !Fog.showBorders
             Fog.savePrefs(this); map.invalidate(); rebuildPanel()
@@ -633,6 +628,52 @@ class MainActivity : Activity() {
             letterSpacing = 0.08f
             setPadding(dp(4), dp(10), 0, dp(6))
         })
+    }
+
+    private fun fogDesc(v: Int) = when {
+        v >= 100 -> "Carte totalement cachée"
+        v >= 85 -> "On distingue à peine les routes"
+        v >= 60 -> "On devine les routes dessous"
+        else -> "Brume légère, carte bien visible"
+    }
+
+    /** Occultation du brouillard : curseur de 20 à 100 %, appliqué en direct sur la carte. */
+    private fun fogSliderRow() {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(rowColor, 14f)
+            setPadding(dp(14), dp(12), dp(14), dp(8))
+        }
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(text("Occultation du brouillard", 15f, fg, true))
+        val sub = text(fogDesc(Fog.fogAlpha), 12f, muted)
+        col.addView(sub)
+        top.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val value = text("${Fog.fogAlpha} %", 13f, accent, true).apply {
+            background = rounded(0x267CC4FF, 10f)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+        }
+        top.addView(value)
+        row.addView(top)
+        val seek = android.widget.SeekBar(this).apply {
+            max = 16                                   // 20 % → 100 % par pas de 5
+            progress = ((Fog.fogAlpha.coerceIn(20, 100) - 20) / 5)
+            progressTintList = ColorStateList.valueOf(accent)
+            thumbTintList = ColorStateList.valueOf(accent)
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar?, p: Int, fromUser: Boolean) {
+                    Fog.fogAlpha = 20 + p * 5
+                    value.text = "${Fog.fogAlpha} %"
+                    sub.text = fogDesc(Fog.fogAlpha)
+                    map.invalidate()
+                }
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar?) { Fog.savePrefs(this@MainActivity) }
+            })
+        }
+        row.addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+        panelBody.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
     }
 
     private fun settingRow(title: String, sub: String, value: String?, color: Int = fg, onClick: () -> Unit) {
