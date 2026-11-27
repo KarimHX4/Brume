@@ -65,6 +65,11 @@
   .item .top span:first-child{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .item .top span:last-child{color:var(--acc)}
   .item small{display:block;color:var(--mut);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item .prog{height:5px}
+  .tog{color:var(--acc);font-weight:700;font-size:13px;padding-top:10px}
+  .dbox{margin:-2px 0 8px 30px}
+  .ditem{background:#1c2333;border-radius:12px;padding:9px 12px 10px;margin-bottom:6px;cursor:pointer}
+  .ditem .top{display:flex;gap:8px;font-weight:700;font-size:14px}
+  .ditem .top span:first-child{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .ditem .top span:last-child{color:var(--acc)}
   .sec{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:10px 4px 6px}
   .set{display:flex;align-items:center;gap:8px;background:var(--row);border-radius:14px;padding:12px 12px 12px 14px;margin-bottom:8px;cursor:pointer;width:100%;text-align:left}
   .set .c{flex:1} .set b{display:block;font-size:15px} .set small{color:var(--mut);font-size:12px}
@@ -219,9 +224,18 @@ function countNew(out){
     const b = c.bbox; if (lo1 < b[0] || lo0 > b[2] || la1 < b[1] || la0 > b[3]) continue;
     let n = 0; for (const p of pts) if (inCity(c, p[0], p[1])) n++;
     if (n){ c.n += n; dirtyCities.add(c.id); }
+    if (n && c.districts) for (const d of c.districts){
+      const db = d.bbox; if (lo1 < db[0] || lo0 > db[2] || la1 < db[1] || la0 > db[3]) continue;
+      let nd = 0; for (const p of pts) if (inCity(d, p[0], p[1])) nd++;
+      d.n += nd;
+    }
   }
 }
 function recount(c){
+  c.n = countIn(c); dirtyCities.add(c.id);
+  if (c.districts) for (const d of c.districts) d.n = countIn(d);
+}
+function countIn(c){
   const b = c.bbox; let n = 0;
   for (const [k, bits] of chunks){
     const [ci, cj] = k.split(',').map(Number), i0 = ci * CH;
@@ -231,7 +245,7 @@ function recount(c){
     if (Math.max(lon0, lon1) < b[0] || Math.min(lon0, lon1) > b[2]) continue;
     forBits(bits, (li, lj) => { const p = cellCenter(i0 + li, cj * CH + lj); if (inCity(c, p[0], p[1])) n++; });
   }
-  c.n = n; dirtyCities.add(c.id);
+  return n;
 }
 function forBits(bits, fn){
   for (let p = 0; p < bits.length; p++){ const v = bits[p]; if (!v) continue;
@@ -335,17 +349,75 @@ applyStyle(S.style);
 try { const v = JSON.parse(localStorage.getItem('brume.view') || 'null'); if (v) map.setView([v[0], v[1]], v[2]); } catch(e){}
 map.on('moveend', () => { try { const c = map.getCenter(); localStorage.setItem('brume.view', JSON.stringify([c.lat, c.lng, map.getZoom()])); } catch(e){} });
 
+/* ---------- Arrondissements / quartiers ---------- */
+const dPending = new Set(), dFailed = new Map();
+const natural = (a, b) => { const na = +(a.name.match(/\d+/) || [NaN])[0], nb = +(b.name.match(/\d+/) || [NaN])[0];
+  return (!isNaN(na) && !isNaN(nb) && na !== nb) ? na - nb : a.name.localeCompare(b.name, 'fr'); };
+const dLabel = ds => !ds ? 'Arrondissements et quartiers' : ds.some(d => /rrondissement/i.test(d.name)) ? 'Arrondissements' : 'Quartiers';
+async function loadDistricts(c, auto){
+  if (c.districts || dPending.has(c.id)) return;
+  if (auto && dFailed.has(c.id) && Date.now() - dFailed.get(c.id) < 600000) return;
+  dPending.add(c.id);
+  try {
+    let list = [];
+    if (c.id.startsWith('relation')){
+      const rel = c.id.slice(8);
+      const q = `[out:json][timeout:40];rel(${rel});map_to_area->.a;rel(area.a)["boundary"="administrative"]["admin_level"~"^(9|10)$"];out tags;`;
+      const js = await (await fetch('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(q))).json();
+      const l9 = [], l10 = [];
+      for (const e of js.elements || []){ const lv = e.tags && e.tags.admin_level; if (lv === '9') l9.push(e.id); else if (lv === '10') l10.push(e.id); }
+      const lookup = async ids => {
+        const out = [];
+        for (let i = 0; i < Math.min(ids.length, 120); i += 40){
+          await sleep(1100);
+          const part = ids.slice(i, i + 40).map(x => 'R' + x).join(',');
+          const arr = await (await fetch(`https://nominatim.openstreetmap.org/lookup?format=jsonv2&polygon_geojson=1&polygon_threshold=0.00002&accept-language=fr&osm_ids=${part}`)).json();
+          for (const o of arr){
+            const g = o.geojson; if (!g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon')) continue;
+            if (!inCity(c, +o.lat, +o.lon)) continue;
+            let name = o.name || String(o.display_name || '').split(',')[0];
+            if (name.toLowerCase().startsWith(c.name.toLowerCase() + ' ')) name = name.slice(c.name.length + 1);
+            name = name.charAt(0).toUpperCase() + name.slice(1);
+            const bbox = bboxOf(g);
+            out.push({ id: 'relation' + o.osm_id, name, geo: g, bbox, area: areaOf(g, bbox), n: 0 });
+          }
+        }
+        return out;
+      };
+      list = await lookup(l9.length >= 2 ? l9 : l10);
+      if (list.length < 2 && l9.length >= 2 && l10.length >= 2) list = await lookup(l10);
+      if (list.length < 2) list = [];
+    }
+    list.sort(natural);
+    for (const d of list) d.n = countIn(d);
+    c.districts = list; dirtyCities.add(c.id); flush();
+  } catch(e){ console.error(e); dFailed.set(c.id, Date.now()); if (!auto) banner('Découpage indisponible, réessaie plus tard'); }
+  dPending.delete(c.id);
+  bordersKey = ''; refreshUI(); if (sheetOpen && sheetMode === 'cities') renderSheet();
+}
+
 /* ---------- Limites des villes ---------- */
 map.createPane('borders'); map.getPane('borders').style.zIndex = 460; map.getPane('borders').style.pointerEvents = 'none';
 const bordersLayer = L.layerGroup().addTo(map);
 let focusId = null, bordersKey = '';
 function currentCityId(){ if (focusId) return focusId; const c = me ? cityAt(me.lat, me.lon) : null; return c ? c.id : null; }
+function findArea(id){ if (cities.has(id)) return cities.get(id); for (const c of cities.values()) if (c.districts) for (const d of c.districts) if (d.id === id) return d; return null; }
 function drawBorders(force){
   const cur = currentCityId();
-  const key = (S.borders ? 1 : 0) + '|' + cities.size + '|' + cur;
+  let nd = 0; for (const c of cities.values()) if (c.districts) nd += c.districts.length;
+  const key = (S.borders ? 1 : 0) + '|' + cities.size + '|' + nd + '|' + cur;
   if (!force && key === bordersKey) return;
   bordersKey = key; bordersLayer.clearLayers();
   if (!S.borders) return;
+  for (const c of cities.values()) if (c.districts) for (const d of c.districts){
+    if (d.id === cur) continue;
+    L.geoJSON(d.geo, { pane: 'borders', interactive: false, style: { color: '#fff', weight: 1, opacity: .55, dashArray: '2 4', fill: false } }).addTo(bordersLayer);
+  }
+  const fa = cur && !cities.has(cur) ? findArea(cur) : null;
+  if (fa){
+    L.geoJSON(fa.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 10, opacity: .25, fill: false } }).addTo(bordersLayer);
+    L.geoJSON(fa.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 3, opacity: 1, fill: false } }).addTo(bordersLayer);
+  }
   for (const c of cities.values()){
     const isCur = c.id === cur;
     if (isCur) L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 10, opacity: .25, fill: false } }).addTo(bordersLayer);
@@ -453,7 +525,9 @@ function refreshUI(){
   drawBorders();
   const c = me ? cityAt(me.lat, me.lon) : null;
   if (c){
-    $('cLabel').textContent = c.sub || 'Ville actuelle'; $('cName').textContent = c.name; $('cPct').textContent = fmtPct(pct(c));
+    if (!c.districts) loadDistricts(c, true);
+    const d = c.districts ? c.districts.find(x => inCity(x, me.lat, me.lon)) : null;
+    $('cLabel').textContent = d ? `${d.name} · ${fmtPct(pct(d))}` : (c.sub || 'Ville actuelle'); $('cName').textContent = c.name; $('cPct').textContent = fmtPct(pct(c));
     $('cProg').style.display = ''; $('cBar').style.width = Math.max(pct(c), 0.5) + '%';
   } else {
     $('cLabel').textContent = tracking ? 'Exploration en cours' : 'Brume';
@@ -486,6 +560,7 @@ function dialog(title, text, buttons){
 
 /* Panneaux */
 let sheetOpen = false, sheetMode = '', outline = null;
+const expanded = new Set();
 function openSheet(mode){
   if (sheetOpen && sheetMode === mode){ closeSheet(); return; }
   sheetMode = mode; renderSheet(); sheetOpen = true;
@@ -505,7 +580,19 @@ function renderCities(){
     h += `<div class="item" data-id="${esc(c.id)}"><div class="rank ${i < 3 ? 'r' + (i + 1) : ''}">${i + 1}</div><div class="c">
       <div class="top"><span>${esc(c.name)}</span><span>${fmtPct(v)}</span></div>
       <small>${fmtArea(c.n * CELL * CELL)} sur ${fmtArea(c.area)}${c.sub ? ' · ' + esc(c.sub) : ''}</small>
-      <div class="prog"><i style="width:${Math.max(v, 0.5)}%"></i></div></div></div>`;
+      <div class="prog"><i style="width:${Math.max(v, 0.5)}%"></i></div>
+      ${(!c.districts || c.districts.length) ? `<div class="tog" data-tog="${esc(c.id)}">${expanded.has(c.id) ? '▴' : '▾'} ${dLabel(c.districts)}${c.districts ? ' (' + c.districts.length + ')' : ''}</div>` : ''}
+      </div></div>`;
+    if (expanded.has(c.id)){
+      h += '<div class="dbox">';
+      if (!c.districts) h += `<div class="note">${dPending.has(c.id) ? 'Chargement du découpage…' : 'Touche pour réessayer'}</div>`;
+      else for (const d of c.districts){
+        const dv = pct(d);
+        h += `<div class="ditem" data-did="${esc(d.id)}"><div class="top"><span${d.n ? '' : ' style="color:var(--mut)"'}>${esc(d.name)}</span><span${d.n ? '' : ' style="color:var(--mut)"'}>${d.n ? fmtPct(dv) : '—'}</span></div>
+          <div class="prog" style="height:4px;margin-top:6px"><i style="width:${d.n ? Math.max(dv, 0.5) : 0}%"></i></div></div>`;
+      }
+      h += '</div>';
+    }
   });
   if (list.length) h += `<div class="note">Touche une ville pour voir ses limites. Le % compare la surface dévoilée à la surface officielle de la commune (OpenStreetMap).</div>`;
   $('shBody').innerHTML = h;
@@ -528,11 +615,24 @@ function renderSettings(){
   h += setRow('Importer un historique', 'Google Maps « Vos trajets », GPX ou sauvegarde Brume (y compris de l\'app Android)', null, 'import');
   h += setRow('Exporter mes données', 'Fichier JSON, réimportable dans l\'app Android', null, 'export');
   h += setRow('Tout effacer', 'Carte découverte et villes', null, 'reset', 'var(--bad)');
-  h += `<div class="note" style="text-align:center">${totalCells.toLocaleString('fr-FR')} cellules de 10 m · Brume web 2.0</div>`;
+  h += `<div class="note" style="text-align:center">${totalCells.toLocaleString('fr-FR')} cellules de 10 m · Brume web 2.1</div>`;
   $('shBody').innerHTML = h;
 }
 const cycle = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
 $('shBody').addEventListener('click', e => {
+  const tog = e.target.closest('.tog');
+  if (tog){
+    const id = tog.dataset.tog, c = cities.get(id);
+    if (expanded.has(id)) expanded.delete(id); else { expanded.add(id); if (c) loadDistricts(c, false); }
+    renderSheet(); return;
+  }
+  const di = e.target.closest('.ditem');
+  if (di){
+    const d = findArea(di.dataset.did); if (!d) return;
+    follow = false; focusId = d.id; drawBorders(true);
+    map.fitBounds([[d.bbox[1], d.bbox[0]], [d.bbox[3], d.bbox[2]]], { padding: [40, 40] });
+    closeSheet(); banner(`${d.name} · ${d.n ? fmtPct(pct(d)) : '0 %'}`); return;
+  }
   const item = e.target.closest('.item');
   if (item){
     const c = cities.get(item.dataset.id); if (!c) return;
@@ -590,7 +690,7 @@ function toB64(u8){ let s = ''; for (let i = 0; i < u8.length; i++) s += String.
 function fromB64(s){ const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 async function exportData(){
   flush();
-  const o = { app: 'brume', v: 1, date: new Date().toISOString(), chunks: {}, cities: [...cities.values()].map(c => ({ id: c.id, name: c.name, sub: c.sub, geo: c.geo, n: c.n, area: c.area })) };
+  const o = { app: 'brume', v: 1, date: new Date().toISOString(), chunks: {}, cities: [...cities.values()].map(c => ({ id: c.id, name: c.name, sub: c.sub, geo: c.geo, n: c.n, area: c.area, districts: c.districts })) };
   for (const [k, b] of chunks) o.chunks[k] = toB64(b);
   const name = 'brume-' + new Date().toISOString().slice(0, 10) + '.json';
   const file = new File([JSON.stringify(o)], name, { type: 'application/json' });
@@ -602,6 +702,7 @@ function addCity(c){
   if (cities.has(c.id)) return;
   const bbox = bboxOf(c.geo);
   const city = { id: c.id, name: c.name, sub: c.sub || '', geo: c.geo, bbox, area: areaOf(c.geo, bbox), n: 0 };
+  if (Array.isArray(c.districts)) city.districts = c.districts.map(d => { const b = bboxOf(d.geo); return { id: d.id, name: d.name, geo: d.geo, bbox: b, area: areaOf(d.geo, b), n: 0 }; });
   cities.set(c.id, city);
 }
 function importBrume(o){
