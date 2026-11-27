@@ -403,13 +403,12 @@ function drawBorders(force){
     L.geoJSON(fa.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 10, opacity: .25, fill: false } }).addTo(bordersLayer);
     L.geoJSON(fa.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 3, opacity: 1, fill: false } }).addTo(bordersLayer);
   }
-  for (const c of cities.values()){
-    const isCur = c.id === cur;
-    if (isCur) L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 10, opacity: .25, fill: false } }).addTo(bordersLayer);
+  // Seule la ville où l'on est (ou celle choisie dans « Mes villes ») est entourée, en bleu
+  const c = cur ? cities.get(cur) : null;
+  if (c){
+    L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 10, opacity: .25, fill: false } }).addTo(bordersLayer);
     L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: { color: '#000', weight: 4, opacity: .45, fill: false } }).addTo(bordersLayer);
-    L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: isCur
-      ? { color: '#7cc4ff', weight: 3, opacity: 1, fill: false }
-      : { color: '#fff', weight: 1.6, opacity: .85, dashArray: '7 5', fill: false } }).addTo(bordersLayer);
+    L.geoJSON(c.geo, { pane: 'borders', interactive: false, style: { color: '#7cc4ff', weight: 3, opacity: 1, fill: false } }).addTo(bordersLayer);
   }
 }
 
@@ -612,7 +611,7 @@ function renderSettings(){
   h += setRow('Style de carte', STYLES[S.style].desc, STYLES[S.style].name, 'style');
   h += `<div class="set slider"><div style="display:flex;align-items:center;gap:8px"><div class="c"><b>Occultation du brouillard</b><small id="fogDesc">${fogDesc(S.fog)}</small></div><span class="val" id="fogVal">${S.fog} %</span></div>
     <input type="range" id="fogRange" min="20" max="100" step="5" value="${S.fog}"></div>`;
-  h += setRow('Limites des villes', 'Contour des communes découvertes, la tienne en bleu', S.borders ? 'Oui' : 'Non', 'borders');
+  h += setRow('Limite de la ville', 'Contour de la ville où tu es ou que tu as choisie', S.borders ? 'Oui' : 'Non', 'borders');
   h += '<div class="sec">Exploration</div>';
   h += setRow('Rayon de découverte', 'Appliqué aux prochains trajets', S.radius + ' m', 'radius');
   h += setRow('Précision GPS acceptée', 'Les positions moins précises sont ignorées', '±' + S.maxAcc + ' m', 'acc');
