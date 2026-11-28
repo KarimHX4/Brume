@@ -72,7 +72,16 @@ class MainActivity : Activity() {
     private val danger = 0xFFFF7A7A.toInt()
     private val rowColor = 0xFF222A3D.toInt()
 
-    private val listener: () -> Unit = { runOnUiThread { refresh() } }
+    // Un seul rafraîchissement en attente à la fois : pendant un import, des milliers de notifications
+    // arrivent en rafale et saturaient la file de l'interface
+    private val refreshPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val listener: () -> Unit = {
+        if (refreshPending.compareAndSet(false, true)) runOnUiThread {
+            refreshPending.set(false)
+            if (!isFinishing && !isDestroyed) refresh()
+        }
+    }
+    private val importing = java.util.concurrent.atomic.AtomicBoolean(false)
 
     companion object {
         private const val REQ_PERM = 1
@@ -166,6 +175,11 @@ class MainActivity : Activity() {
         Geocoder.onNewCity = { c -> runOnUiThread { showBanner("Nouvelle ville · ${c.name}") } }
         Geocoder.onNewDistrict = { _, d -> runOnUiThread { showBanner("Nouvel arrondissement · ${d.name}") } }
 
+        // Plantage ou gel lors d'une précédente utilisation : on le signale une fois
+        if (BrumeApp.hasNewCrash(this)) map.postDelayed({
+            if (!isFinishing) showBanner("Brume s'est arrêtée la dernière fois · Réglages → Diagnostic")
+        }, 1500)
+
         // Reprend l'exploration si elle tournait quand l'app a été fermée par le système
         if (prefs.getBoolean("tracking", false) && !TrackingService.running) {
             if (hasLoc() && TrackingService.locationOn(this)) TrackingService.start(this)
@@ -183,6 +197,12 @@ class MainActivity : Activity() {
         if (outlines.isNotEmpty() || Fog.focusId != null) clearOutline()
         if (!TrackingService.running) seedLastKnown(true)
         refresh()
+    }
+
+    override fun onDestroy() {
+        Geocoder.onNewCity = null
+        Geocoder.onNewDistrict = null
+        super.onDestroy()
     }
 
     override fun onPause() {
@@ -584,7 +604,10 @@ class MainActivity : Activity() {
         follow = false
         clearOutline()
         Fog.focusId = c.id
-        map.zoomToBoundingBox(BoundingBox(c.bbox[3], c.bbox[2], c.bbox[1], c.bbox[0]), true, dp(48))
+        val b = c.bbox
+        // Contour dégénéré : on centre simplement au lieu de calculer un zoom impossible
+        if (b[2] - b[0] < 1e-5 || b[3] - b[1] < 1e-5 || b[0] > b[2]) map.controller.animateTo(GeoPoint((b[1] + b[3]) / 2, (b[0] + b[2]) / 2))
+        else try { map.zoomToBoundingBox(BoundingBox(b[3], b[2], b[1], b[0]), true, dp(48)) } catch (e: Exception) { e.printStackTrace() }
         hidePanel()
         showBanner("${c.name} · ${Fog.fmtPct(c.pct())}")
     }
@@ -644,6 +667,12 @@ class MainActivity : Activity() {
         settingRow("Batterie sans restriction",
             if (okBatt) "Android ne coupera pas l'exploration" else "Recommandé pour l'écran verrouillé",
             if (okBatt) "✓" else null, if (okBatt) green else warn) { askBattery() }
+
+        section("Diagnostic")
+        val crash = BrumeApp.hasNewCrash(this)
+        settingRow("Rapport de plantage", if (crash) "Un arrêt récent a été enregistré" else "Aucun plantage récent", if (crash) "!" else "✓", if (crash) warn else fg) {
+            showCrashReport()
+        }
 
         section("Données")
         settingRow("Importer un historique", "Google Maps « Vos trajets », GPX (Strava, Garmin…) ou sauvegarde Brume", null) {
@@ -754,6 +783,7 @@ class MainActivity : Activity() {
         val uri = data?.data ?: return
         when (requestCode) {
             REQ_OPEN -> {
+                if (!importing.compareAndSet(false, true)) { toast("Un import est déjà en cours"); return }
                 toast("Import en cours…")
                 Thread {
                     try {
@@ -781,6 +811,8 @@ class MainActivity : Activity() {
                         e.printStackTrace(); toast("Fichier non reconnu")
                     } catch (e: OutOfMemoryError) {
                         toast("Fichier trop volumineux")
+                    } finally {
+                        importing.set(false)
                     }
                 }.start()
             }
@@ -792,9 +824,34 @@ class MainActivity : Activity() {
                     toast("Sauvegarde exportée")
                 } catch (e: Exception) {
                     e.printStackTrace(); toast("Échec de l'export")
+                } catch (e: OutOfMemoryError) {
+                    toast("Données trop volumineuses pour l'export")
                 }
             }.start()
         }
+    }
+
+    private fun showCrashReport() {
+        val txt = BrumeApp.report(this).ifEmpty { "Aucun plantage enregistré." }
+        BrumeApp.markSeen(this)
+        val tv = TextView(this).apply {
+            text = txt
+            textSize = 11f
+            setTextIsSelectable(true)
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rapport de plantage")
+            .setView(ScrollView(this).apply { addView(tv) })
+            .setPositiveButton("Copier") { _, _ ->
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Rapport Brume", txt))
+                toast("Copié : colle-le dans la conversation avec Claude")
+            }
+            .setNegativeButton("Fermer", null)
+            .setOnDismissListener { if (panel.visibility == View.VISIBLE && panelMode == "settings") rebuildPanel() }
+            .show()
     }
 
     // ---------- Utilitaires ----------

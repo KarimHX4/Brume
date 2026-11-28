@@ -71,7 +71,7 @@ object Geocoder {
                     ?: d.optString("name").ifEmpty { "Lieu inconnu" }
                 val region = a.optString("state").ifEmpty { a.optString("county") }
                 val sub = listOf(region, a.optString("country")).filter { it.isNotEmpty() }.joinToString(", ")
-                val c = City(id, name, sub, g, 0)
+                val c = City(id, name, sub, City.lighten(g), 0)
                 if (Fog.addCity(c)) {
                     onNewCity?.invoke(c)
                     Fog.notifyChanged()
@@ -79,7 +79,10 @@ object Geocoder {
                 found = synchronized(Fog.lock) { Fog.cities[id] }
             }
             val fc = found
-            synchronized(Fog.lock) { if (fc == null || !fc.contains(p[0], p[1])) misses.add(p) }
+            synchronized(Fog.lock) {
+                if (fc == null || !fc.contains(p[0], p[1])) misses.add(p)
+                if (misses.size > 3000) misses.subList(0, 1000).clear()   // mémoire bornée
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
@@ -110,7 +113,7 @@ object Geocoder {
                     var name = d.optString("name").ifEmpty { "Arrondissement" }
                     if (name.startsWith(city.name + " ", ignoreCase = true)) name = name.substring(city.name.length + 1)
                     name = name.replaceFirstChar { it.uppercase() }
-                    val dist = City(id, name, "", g, 0)
+                    val dist = City(id, name, "", City.lighten(g), 0)
                     if (!dist.contains(p[0], p[1])) synchronized(Fog.lock) { dMisses.add(p) }
                     else if (Fog.addDistrict(city.id, dist)) { onNewDistrict?.invoke(city, dist); Fog.notifyChanged() }
                 }

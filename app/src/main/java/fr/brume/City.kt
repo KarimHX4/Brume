@@ -17,8 +17,11 @@ class City(val id: String, val name: String, val sub: String, val geo: JSONObjec
 
     init {
         val coords = geo.getJSONArray("coordinates")
-        if (geo.getString("type") == "Polygon") polys.add(parsePoly(coords))
-        else for (i in 0 until coords.length()) polys.add(parsePoly(coords.getJSONArray(i)))
+        val parsed = if (geo.getString("type") == "Polygon") listOf(parsePoly(coords))
+                     else (0 until coords.length()).map { parsePoly(coords.getJSONArray(it)) }
+        // Contours vides ou dégénérés ignorés (sinon plantage à l'accès poly[0])
+        for (p in parsed) if (p.isNotEmpty()) polys.add(p)
+        require(polys.isNotEmpty()) { "contour vide" }
         for (poly in polys) {
             val r = poly[0]
             var q = 0
@@ -34,14 +37,27 @@ class City(val id: String, val name: String, val sub: String, val geo: JSONObjec
         area = a
     }
 
-    private fun parsePoly(arr: JSONArray): List<DoubleArray> = (0 until arr.length()).map { ri ->
-        val ring = arr.getJSONArray(ri)
-        val d = DoubleArray(ring.length() * 2)
-        for (p in 0 until ring.length()) {
-            val pt = ring.getJSONArray(p)
-            d[2 * p] = pt.getDouble(0); d[2 * p + 1] = pt.getDouble(1)
+    /** Anneaux d'un polygone ; un extérieur invalide (< 3 points) invalide tout le polygone. */
+    private fun parsePoly(arr: JSONArray): List<DoubleArray> {
+        val rings = ArrayList<DoubleArray>()
+        for (ri in 0 until arr.length()) {
+            val ring = arr.optJSONArray(ri) ?: continue
+            // Très gros contours : on ne garde qu'un point sur k (calculs et dessin plus légers)
+            val step = maxOf(1, ring.length() / MAX_RING)
+            val d = ArrayList<Double>(ring.length() / step * 2 + 2)
+            var p = 0
+            while (p < ring.length()) {
+                val pt = ring.optJSONArray(p)
+                if (pt != null && pt.length() >= 2) {
+                    val x = pt.optDouble(0); val y = pt.optDouble(1)
+                    if (!x.isNaN() && !y.isNaN()) { d.add(x); d.add(y) }
+                }
+                p += step
+            }
+            if (d.size < 6) { if (ri == 0) return emptyList() else continue }
+            rings.add(d.toDoubleArray())
         }
-        d
+        return rings
     }
 
     private fun ringArea(r: DoubleArray, lat0: Double): Double {
@@ -85,6 +101,31 @@ class City(val id: String, val name: String, val sub: String, val geo: JSONObjec
         .put("id", id).put("name", name).put("sub", sub).put("geo", geo).put("n", n).put("area", area)
 
     companion object {
+        private const val MAX_RING = 5000
+
+        /** Allège un GeoJSON trop détaillé avant de le garder (limite de taille SQLite, mémoire). */
+        fun lighten(geo: JSONObject, maxPoints: Int = 30000): JSONObject {
+            return try {
+                val coords = geo.getJSONArray("coordinates")
+                val polys = if (geo.getString("type") == "Polygon") listOf(coords) else (0 until coords.length()).map { coords.getJSONArray(it) }
+                var total = 0
+                for (poly in polys) for (r in 0 until poly.length()) total += poly.getJSONArray(r).length()
+                if (total <= maxPoints) return geo
+                val step = (total + maxPoints - 1) / maxPoints
+                fun thin(ring: JSONArray): JSONArray {
+                    val out = JSONArray()
+                    var i = 0
+                    while (i < ring.length()) { out.put(ring.get(i)); i += step }
+                    if (ring.length() > 0) out.put(ring.get(0))   // anneau refermé
+                    return out
+                }
+                fun thinPoly(poly: JSONArray): JSONArray { val o = JSONArray(); for (r in 0 until poly.length()) o.put(thin(poly.getJSONArray(r))); return o }
+                val newCoords = if (geo.getString("type") == "Polygon") thinPoly(coords)
+                                else JSONArray().also { a -> for (p in polys) a.put(thinPoly(p)) }
+                JSONObject().put("type", geo.getString("type")).put("coordinates", newCoords)
+            } catch (e: Exception) { geo }
+        }
+
         fun fromJson(o: JSONObject) = City(
             o.getString("id"), o.optString("name", "?"), o.optString("sub", ""),
             o.getJSONObject("geo"), o.optLong("n", 0L)

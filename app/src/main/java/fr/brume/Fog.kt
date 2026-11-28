@@ -84,14 +84,61 @@ object Fog {
             maxAcc = p.getInt("maxAcc", 50).toFloat()
             fogAlpha = p.getInt("fogAlpha", 70)
             showBorders = p.getBoolean("borders", true)
-            val s = Store(ctx.applicationContext)
-            store = s
-            try { s.load(chunks, cities, districts) } catch (e: Exception) { e.printStackTrace() }
-            var n = 0L
-            for (b in chunks.values) n += bitCount(b)
-            totalCells = n
+            store = Store(ctx.applicationContext)
         }
-        io.scheduleWithFixedDelay({ flush() }, 5, 5, TimeUnit.SECONDS)
+        // Lecture de la base en arrière-plan : avec beaucoup de données, la faire au démarrage
+        // sur le fil principal gelait l'app (et pouvait faire échouer le démarrage du service GPS)
+        io.execute { loadFromDisk() }
+        io.scheduleWithFixedDelay({ try { flush() } catch (e: Throwable) { e.printStackTrace() } }, 5, 5, TimeUnit.SECONDS)
+    }
+
+    /** Vrai une fois la base relue : avant, on n'écrit rien (on écraserait des blocs incomplets). */
+    @Volatile var loaded = false
+        private set
+
+    private fun loadFromDisk() {
+        val s = store ?: return
+        val ch = HashMap<Long, ByteArray>()
+        val ci = LinkedHashMap<String, City>()
+        val di = HashMap<String, List<City>>()
+        try { s.load(ch, ci, di) } catch (e: Throwable) { e.printStackTrace() }
+        synchronized(lock) {
+            // Fusion avec ce qui a pu être dévoilé pendant la lecture
+            for ((k, u) in ch) {
+                if (u.size != CH * CH / 8) continue
+                val b = chunks[k]
+                if (b == null) { chunks[k] = u; totalCells += bitCount(u) }
+                else {
+                    for (p in b.indices) {
+                        val add = u[p].toInt() and b[p].toInt().inv() and 0xff
+                        if (add != 0) { b[p] = (b[p].toInt() or add).toByte(); totalCells += Integer.bitCount(add) }
+                    }
+                    dirty.add(k)
+                }
+            }
+            for ((k, v) in ci) cities.putIfAbsent(k, v)
+            for ((k, v) in di) districts.putIfAbsent(k, v)
+            loaded = true
+        }
+        notifyChanged()
+    }
+
+    /** Copie des blocs qui touchent une zone, pour compter hors verrou. */
+    private fun snapshot(b: DoubleArray): List<Pair<Long, ByteArray>> {
+        val out = ArrayList<Pair<Long, ByteArray>>()
+        for ((k, bits) in chunks) {
+            val i0 = kci(k) * CH
+            val lat0 = i0 * DLAT
+            val lat1 = (i0 + CH) * DLAT
+            if (lat1 < b[1] || lat0 > b[3]) continue
+            val cj = kcj(k)
+            val dl = dLon(i0 + CH / 2)
+            val lonA = cj * CH * dl * 0.97
+            val lonB = (cj + 1) * CH * dl * 1.03
+            if (max(lonA, lonB) < b[0] || minOf(lonA, lonB) > b[2]) continue
+            out.add(k to bits.copyOf())
+        }
+        return out
     }
 
     fun savePrefs(ctx: Context) {
@@ -257,13 +304,17 @@ object Fog {
 
     /** Ajoute un arrondissement visité à sa commune (tri naturel : 2e avant 10e). */
     fun addDistrict(cityId: String, d: City): Boolean {
+        var snap: List<Pair<Long, ByteArray>> = emptyList()
         synchronized(lock) {
             val cur = districts[cityId] ?: emptyList()
             if (cur.any { it.id == d.id }) return false
-            d.n = countIn(d)
+            d.n = 0
             districts[cityId] = (cur + d).sortedWith(naturalOrder)
+            snap = snapshot(d.bbox)
             newDistricts.add(cityId)
         }
+        val n = countIn(d, snap)
+        synchronized(lock) { d.n += n; dirtyD.add(d.id) }
         return true
     }
 
@@ -280,16 +331,31 @@ object Fog {
         cities.values.firstOrNull { it.contains(lat, lon) }
     }
 
+    /**
+     * Recompte une zone sans bloquer la carte ni le GPS : remise à zéro + copie des blocs sous verrou,
+     * comptage hors verrou, puis ajout. Les cellules dévoilées entre-temps sont comptées par countNew.
+     */
     private fun recount(c: City) {
-        c.n = countIn(c)
-        dirtyN.add(c.id)
-        districts[c.id]?.forEach { d -> d.n = countIn(d); dirtyD.add(d.id) }
+        var snap: List<Pair<Long, ByteArray>> = emptyList()
+        var ds: List<City> = emptyList()
+        synchronized(lock) {
+            c.n = 0
+            ds = districts[c.id] ?: emptyList()
+            for (d in ds) d.n = 0
+            snap = snapshot(c.bbox)
+        }
+        val n = countIn(c, snap)
+        val nd = ds.map { countIn(it, snap) }
+        synchronized(lock) {
+            c.n += n; dirtyN.add(c.id)
+            ds.forEachIndexed { i, d -> d.n += nd[i]; dirtyD.add(d.id) }
+        }
     }
 
-    private fun countIn(c: City): Long {
+    private fun countIn(c: City, src: List<Pair<Long, ByteArray>>): Long {
         val b = c.bbox
         var n = 0L
-        for ((k, bits) in chunks) {
+        for ((k, bits) in src) {
             val i0 = kci(k) * CH
             val cj = kcj(k)
             val lat0 = i0 * DLAT
@@ -307,15 +373,18 @@ object Fog {
         return n
     }
 
-    fun recountAll() { synchronized(lock) { for (c in cities.values) recount(c) } }
+    fun recountAll() {
+        val list = synchronized(lock) { cities.values.toList() }
+        for (c in list) recount(c)
+    }
 
     fun addCity(c: City): Boolean {
         synchronized(lock) {
             if (cities.containsKey(c.id)) return false
             cities[c.id] = c
-            recount(c)
             newCities.add(c.id)
         }
+        recount(c)
         return true
     }
 
@@ -340,6 +409,7 @@ object Fog {
     // ---------- Stockage ----------
     fun flush() {
         val s = store ?: return
+        if (!loaded) return
         val batch = synchronized(lock) {
             if (dirty.isEmpty() && dirtyN.isEmpty() && newCities.isEmpty() && newDistricts.isEmpty() && dirtyD.isEmpty()) null
             else {

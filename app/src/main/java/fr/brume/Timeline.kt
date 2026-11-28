@@ -89,7 +89,8 @@ object Timeline {
         var lastGeo: Pt? = null
         var i = 0
         while (i < list.size) {
-            val end = minOf(i + 2000, list.size)
+            // Petits lots : le verrou est relâché souvent, la carte et le GPS restent fluides
+            val end = minOf(i + 100, list.size)
             synchronized(Fog.lock) {
                 val out = IntBuf()
                 for (k in i until end) {

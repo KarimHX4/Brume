@@ -12,12 +12,16 @@ import java.time.OffsetDateTime
 /** Import de tracés GPX et sauvegarde/restauration JSON (même format que la version web). */
 object Io {
 
-    fun exportJson(): String = synchronized(Fog.lock) {
+    fun exportJson(): String {
+        // Copie rapide sous verrou, puis encodage (lent) sans bloquer la carte
+        val (chunks, cities) = synchronized(Fog.lock) {
+            Fog.chunks.map { (k, b) -> k to b.copyOf() } to Fog.cities.values.toList()
+        }
         val ch = JSONObject()
-        for ((k, b) in Fog.chunks) ch.put("${Fog.kci(k)},${Fog.kcj(k)}", Base64.encodeToString(b, Base64.NO_WRAP))
+        for ((k, b) in chunks) ch.put("${Fog.kci(k)},${Fog.kcj(k)}", Base64.encodeToString(b, Base64.NO_WRAP))
         val cs = JSONArray()
-        for (c in Fog.cities.values) cs.put(c.toJson())
-        JSONObject().put("app", "brume").put("v", 1).put("date", Instant.now().toString())
+        for (c in cities) cs.put(c.toJson())
+        return JSONObject().put("app", "brume").put("v", 1).put("date", Instant.now().toString())
             .put("chunks", ch).put("cities", cs).toString()
     }
 
@@ -100,7 +104,7 @@ object Io {
                     "trkpt", "rtept" -> {
                         if (!lat.isNaN() && !lon.isNaN()) { batch.add(Pt(lat, lon, time)); total++ }
                         inPt = false
-                        if (batch.size >= 500) flushBatch()
+                        if (batch.size >= 100) flushBatch()
                     }
                 }
             }
